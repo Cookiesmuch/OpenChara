@@ -27,7 +27,12 @@ OpenChara (this repo, public)          Your project (any repo, public or private
   - Squad coordination: target saturation and posture.
   - CQB playbooks: breach, room clear, slice the pie.
   - Hunting that cuts off the prey's escape routes first, and multi-squad army coordination.
-- **UI base:** the Codex menu (placeholder forms, to be replaced by the custom UI system).
+- **Custom UI system** ([docs/UI.md](docs/UI.md)):
+  - An HTML/CSS-like screen language compiled to JSON UI, with templates, loops, conditions, animations and actions.
+  - Menus with navigation, pickers and dialogue, plus a persistent per-player HUD and chest-style container screens.
+  - An RTS command mode.
+  - Per-player languages.
+  - Auto-generated character portraits cut from skins.
 
 ## Using it
 

@@ -11,7 +11,8 @@ PATCHES/
   abilities/*.json      abilities
   quests/*.json         quests
   scripts/**/*.js       content scripts (every file is imported once at startup)
-  lang/<locale>.lang    translation strings, merged after the engine's
+  ui/*.ui.html, *.ui.css   custom screens, HUDs and styles (see UI.md)
+  lang/<locale>.lang    translation strings over the engine's; any locale id works (see UI.md, Languages)
   bp/**                 files copied into the behavior pack as-is (override engine files at the same path)
   rp/**                 files copied into the resource pack as-is (textures, models, sounds, ...)
 ```
@@ -147,3 +148,7 @@ import { createCharacter, manifestCharacter, NS } from "../openchara/api.js";
 ```
 
 Scripts in subfolders import it with an extra `../` (e.g. `../../openchara/api.js`). Anything not exported from `api.js` is internal and may change.
+
+## ui/
+
+Screens, HUDs and container screens are written in OpenChara's UI language. See [UI.md](UI.md) for the full reference.
