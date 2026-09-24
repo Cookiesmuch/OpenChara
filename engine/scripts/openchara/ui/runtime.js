@@ -41,6 +41,15 @@ const FILTERS = {
     default: (v, d) => (v === undefined || v === null || v === "" ? d : v),
     fixed: (v, n) => (Number(v) || 0).toFixed(Number(n) || 0),
     clamp: (v, lo, hi) => Math.min(Number(hi), Math.max(Number(lo), Number(v) || 0)),
+    // One page of a list: each="c in characters | page:state.page:10"
+    page: (v, p, size) => {
+        const n = Number(size) || 10, k = Number(p) || 0;
+        return Array.isArray(v) ? v.slice(k * n, (k + 1) * n) : [];
+    },
+    pages: (v, size) => Math.max(1, Math.ceil((Array.isArray(v) ? v.length : 0) / (Number(size) || 10))),
+    // Shortens to n characters with "..." - labels have a fixed height, so an
+    // over-long value would otherwise wrap into the line below.
+    trunc: (v, n) => { const s = String(v ?? ""); const k = Number(n) || 12; return s.length > k ? `${s.slice(0, Math.max(1, k - 2))}..` : s; },
 };
 
 export function evaluate(ast, env) {

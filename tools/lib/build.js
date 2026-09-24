@@ -20,6 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const { compileUi } = require("./ui/compile.js");
+const { generatePortraits } = require("./portraits.js");
 
 const TEXT_EXT = new Set([".json", ".lang", ".js", ".md", ".txt", ".mcfunction"]);
 
@@ -285,6 +286,15 @@ function build(projectDir) {
     for (const rel of walk(scripts)) {
         if (!p.devTools && rel.startsWith("openchara/devtools/")) continue;
         put(bp, `scripts/${rel}`, fs.readFileSync(path.join(scripts, rel)));
+    }
+
+    // 3b. automatic portraits (before the content module, which carries
+    // their paths). A character's own portrait/bust fields always win.
+    const portraits = generatePortraits(p, content.characters, walk);
+    for (const [rel, buf] of portraits.files) put(rp, rel, buf);
+    for (const [id, pp] of Object.entries(portraits.paths)) {
+        content.characters[id].portrait ??= pp.portrait;
+        content.characters[id].bust ??= pp.bust;
     }
 
     // 4. generated
