@@ -38,7 +38,11 @@ function checkTree(map, label) {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openchara-check-"));
         try {
             for (const rel of scripts) {
-                const f = path.join(tmp, rel);
+                // Checked as .mjs: Bedrock scripts are ES modules, and
+                // `node --check` on a .js file containing `import` silently
+                // passes syntax errors on some Node versions (module-type
+                // detection swallows them). .mjs forces a real ESM parse.
+                const f = path.join(tmp, rel.replace(/\.js$/, ".mjs"));
                 fs.mkdirSync(path.dirname(f), { recursive: true });
                 fs.writeFileSync(f, map.get(rel));
                 const r = spawnSync(process.execPath, ["--check", f], { encoding: "utf8" });
