@@ -4,27 +4,6 @@
   "texture_data": {
     "{{ns}}_soul_token": {
       "textures": "textures/items/heartofthesea_closed"
-    },
-    "{{ns}}_rts_select": {
-      "textures": "textures/items/lead"
-    },
-    "{{ns}}_rts_move": {
-      "textures": "textures/items/arrow"
-    },
-    "{{ns}}_rts_attack": {
-      "textures": "textures/items/iron_sword"
-    },
-    "{{ns}}_rts_formation": {
-      "textures": "textures/items/banner_pattern"
-    },
-    "{{ns}}_rts_surround": {
-      "textures": "textures/items/spyglass"
-    },
-    "{{ns}}_rts_summon": {
-      "textures": "textures/items/ender_pearl"
-    },
-    "{{ns}}_rts_exit": {
-      "textures": "textures/items/door_wood"
     }
   }
 }

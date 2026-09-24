@@ -1,15 +1,23 @@
-// RTS command mode: a free top-down camera over the battlefield, an
-// in-world cursor, and hotbar command items - built from the proven AC
-// spikes (rtsSpike/rtsDummy, AC history 7641b72) and UI-0 spike (f).
+// RTS command mode: a free top-down camera over the battlefield and an
+// in-world cursor - built from the proven AC spikes (rtsSpike/rtsDummy, AC
+// history 7641b72) and UI-0 spike (f).
 //
-// Entering:
+// This module is pure mechanism: it owns the camera, the body double, and
+// the squad/formation/cursor STATE, and exports one function per command
+// (rtsSelectSquad, rtsMove, ...) for a project to wire to whatever it
+// wants - hotbar items, a menu, a chat command. It never decides how a
+// player invokes a command; see ui/controlItems.js for a ready-made
+// "locked hotbar item -> handler" helper if that's what a project wants
+// (Claude Waifus' PATCHES/scripts/rtsControls.js is the reference wiring).
+//
+// Entering (enterRts):
 //   1. A BODY DOUBLE (<ns>:rts_body) is spawned where the player stands and
 //      takes a full copy of their gear + inventory. Only once that copy is
 //      confirmed are the player's own items cleared (the rtsDummy rule: the
 //      trusted copy is never destroyed before the new one is confirmed). A
 //      serialized backup also goes into a player dynamic property.
-//   2. The player gets locked command items, turns invisible and protected,
-//      and loses movement input (WASD now pans the camera).
+//   2. The player turns invisible and protected, and loses movement input
+//      (WASD now pans the camera).
 //   3. "follow" characters follow the body double, not the player.
 // While in RTS:
 //   - camera: minecraft:free, eased, looking down at a fixed angle;
@@ -17,15 +25,15 @@
 //   - cursor: a ray from the camera along its angle, offset by how far the
 //     player's head has turned since entering (the head still turns
 //     freely), marked in the world with particles; the player's own body
-//     is teleported along under the camera so chunks keep loading;
-//   - command items (right-click): select squad (or the squad of the waifu
-//     under the cursor), move here, attack/hunt, formation, surround,
-//     summon squad here, exit.
-// Exiting: the player goes back to the body double, gets their items back
-// from it (or the backup if it's gone), and only then is it removed.
-// A player who relogs, dies or hits /reload in RTS is restored the same way.
+//     is teleported along under the camera so chunks keep loading.
+// Exiting (exitRts): the player goes back to the body double, gets their
+// items back from it (or the backup if it's gone), and only then is it
+// removed. A player who relogs, dies or hits /reload in RTS is restored
+// the same way - registerRtsExitHook(fn) runs on every one of those paths,
+// not just a manual exitRts(), so a project can reliably clean up anything
+// it gave the player for command mode (e.g. clearControlItems).
 
-import { world, system, ItemStack, InputPermissionCategory, ItemLockMode } from "@minecraft/server";
+import { world, system, InputPermissionCategory } from "@minecraft/server";
 import { serializeItem, deserializeItem } from "../itemSerializer.js";
 import { readSquads, getSquad, getManifestedMembers } from "../squads.js";
 import { getCharacter, setOrder } from "../characterRecord.js";
@@ -43,17 +51,16 @@ const BODY = `${NS}:rts_body`;
 const DP_STATE = `${NS}:rts`;          // { bodyId, dim, loc, rot }
 const DP_BACKUP = `${NS}:rtsBackup`;   // serialized items (second safety net)
 const ARMOR = ["Head", "Chest", "Legs", "Feet"];
-const ITEMS = [
-    ["rts_select", "select"], ["rts_move", "move"], ["rts_attack", "attack"], ["rts_formation", "formation"],
-    ["rts_surround", "surround"], ["rts_summon", "summon"], null, null, ["rts_exit", "exit"],
-];
-const COMMANDS = new Map(ITEMS.filter(Boolean).map(([id, cmd]) => [`${NS}:${id}`, cmd]));
 const PITCH = 55;
 const LOCK_TICKS = 20 * 60 * 10;
 const EFFECTS = ["invisibility", "resistance", "fire_resistance", "water_breathing"];
 
 const active = new Map(); // playerId -> state
 const busy = new Set();
+const exitHooks = []; // (player) => void, run on every exit path
+
+export function registerRtsExitHook(fn) { exitHooks.push(fn); }
+function runExitHooks(player) { for (const fn of exitHooks) { try { fn(player); } catch (e) { console.warn(`[${TAG}] RTS exit hook: ${e}`); } } }
 
 const say = (p, m) => { try { p.sendMessage(m); } catch (e) { /* offline */ } };
 const bar = (p, m) => { try { p.onScreenDisplay.setActionBar(m); } catch (e) { /* fine */ } };
@@ -90,24 +97,6 @@ function clearPlayer(player) {
 }
 const itemSig = it => (it ? `${it.typeId}x${it.amount}` : "-");
 
-// ---- command items ------------------------------------------------------------------------
-function giveCommandItems(player) {
-    const inv = player.getComponent("minecraft:inventory").container;
-    ITEMS.forEach((entry, slot) => {
-        if (!entry) return;
-        const item = new ItemStack(`${NS}:${entry[0]}`, 1);
-        try { item.lockMode = ItemLockMode.slot; } catch (e) { /* fine */ }
-        try { item.keepOnDeath = true; } catch (e) { /* fine */ }
-        inv.setItem(slot, item);
-    });
-}
-function stripCommandItems(player) {
-    try {
-        const inv = player.getComponent("minecraft:inventory").container;
-        for (let i = 0; i < inv.size; i++) if (COMMANDS.has(inv.getItem(i)?.typeId)) inv.setItem(i, undefined);
-    } catch (e) { /* fine */ }
-}
-
 // ---- enter ---------------------------------------------------------------------------------
 export function enterRts(player) {
     if (active.has(player.id) || busy.has(player.id)) return false;
@@ -135,7 +124,6 @@ export function enterRts(player) {
         catch (e) { console.warn(`[${TAG}] RTS backup skipped: ${e}`); }
 
         clearPlayer(player);
-        giveCommandItems(player);
         for (const fx of EFFECTS) { try { player.addEffect(fx, 20000000, { amplifier: fx === "resistance" ? 4 : 0, showParticles: false }); } catch (e) { /* fine */ } }
         try { player.inputPermissions.setPermissionCategory(InputPermissionCategory.Movement, false); } catch (e) { /* fine */ }
         setFollowOverride(player.id, { location: loc, dimension: player.dimension });
@@ -151,7 +139,6 @@ export function enterRts(player) {
         };
         state.run = system.runInterval(() => tick(player, state), 2);
         active.set(player.id, state);
-        say(player, "§b[Command mode] WASD pans, jump/sneak zoom, look to aim. Right-click the hotbar items to give orders.");
         return true;
     } catch (e) {
         say(player, `§c[Command mode] ${e?.message ?? e}`);
@@ -220,12 +207,22 @@ function tick(player, s) {
     } catch (e) { console.warn(`[${TAG}] RTS camera: ${e}`); }
 }
 
-// ---- commands --------------------------------------------------------------------------------
+// ---- commands ---------------------------------------------------------------------------------
+// Each is a standalone, project-invokable primitive - wire whichever ones
+// you want to items/menus/commands (ui/controlItems.js for a hotbar).
+// Every one throws a player-facing Error on a bad call (no squad selected,
+// nothing under the cursor, ...); a caller typically catches it and shows
+// the message however it shows other action failures.
 function squadMembers(player, s) {
     if (!s.squadId) return [];
     return getManifestedMembers(player, s.squadId)
         .map(m => ({ ...m, entity: live(m.record.manifestedEntityId) }))
         .filter(m => m.entity);
+}
+function needState(player) {
+    const s = active.get(player.id);
+    if (!s) throw new Error("Not in command mode.");
+    return s;
 }
 function needSquad(player, s) {
     const squad = s.squadId && getSquad(player, s.squadId);
@@ -240,79 +237,76 @@ function lockAndHold(player, members) {
     }
 }
 
-function runCommand(player, cmd) {
-    const s = active.get(player.id);
-    if (!s) return;
-    switch (cmd) {
-        case "exit": exitRts(player); return;
-        case "select": {
-            // The squad of the waifu under the cursor, else the next squad.
-            const id = s.target ? identifyCharacter(s.target) : null;
-            const hers = id?.ownerId === player.id ? getCharacter(player, id.characterId)?.squadId : null;
-            const squads = readSquads(player).filter(q => q.memberIds.length);
-            if (!squads.length) throw new Error("You have no squads with members.");
-            if (hers) s.squadId = hers;
-            else {
-                const i = squads.findIndex(q => q.id === s.squadId);
-                s.squadId = squads[(i + 1) % squads.length].id;
-            }
-            const q = getSquad(player, s.squadId);
-            bar(player, `§bSelected: ${q.name} (${squadMembers(player, s).length}/${q.memberIds.length} in the field)`);
-            return;
-        }
-        case "formation": {
-            const i = FORMATION_TYPES.indexOf(s.formation);
-            s.formation = FORMATION_TYPES[(i + 1) % FORMATION_TYPES.length];
-            bar(player, `§bFormation: ${s.formation} - Move Here uses it`);
-            return;
-        }
-        case "move": {
-            const squad = needSquad(player, s);
-            if (!s.cursor) throw new Error("Aim at the ground first.");
-            const members = squadMembers(player, s);
-            if (!members.length) throw new Error(`${squad.name} has nobody in the field - Summon Squad Here.`);
-            lockAndHold(player, members);
-            const c = members.reduce((a, m) => ({ x: a.x + m.entity.location.x / members.length, z: a.z + m.entity.location.z / members.length }), { x: 0, z: 0 });
-            const len = Math.hypot(s.cursor.x - c.x, s.cursor.z - c.z) || 1;
-            const heading = { x: (s.cursor.x - c.x) / len, y: 0, z: (s.cursor.z - c.z) / len };
-            const started = executeFormation(s.formation, player.dimension, s.cursor, heading, s.cursor, members);
-            bar(player, `§a${squad.name}: ${s.formation} at ${Math.floor(s.cursor.x)}, ${Math.floor(s.cursor.z)} (${started}/${members.length})`);
-            return;
-        }
-        case "attack": {
-            const squad = needSquad(player, s);
-            if (!s.target) throw new Error("Aim at a mob first.");
-            if (identifyCharacter(s.target)) throw new Error("That's a waifu, not a target.");
-            const members = squadMembers(player, s);
-            if (!members.length) throw new Error(`${squad.name} has nobody in the field.`);
-            lockAndHold(player, members);
-            const desc = startHunt(members, s.target, msg => say(player, msg));
-            bar(player, desc ? `§6${squad.name} hunting: ${desc}` : "§cCouldn't start the attack.");
-            return;
-        }
-        case "surround": {
-            if (!s.target || identifyCharacter(s.target)) throw new Error("Aim at a mob first.");
-            const n = envelopTarget(player, s.target);
-            bar(player, n ? `§6${n} squad(s) surrounding the ${s.target.typeId.replace("minecraft:", "")}` : "§cNo squads in the field.");
-            return;
-        }
-        case "summon": {
-            const squad = needSquad(player, s);
-            if (!s.cursor) throw new Error("Aim at the ground first.");
-            let n = 0;
-            for (const id of squad.memberIds) {
-                const rec = getCharacter(player, id);
-                if (!rec) continue;
-                const ok = live(rec.manifestedEntityId)
-                    ? teleportToMe(player, id, s.cursor, player.dimension)
-                    : manifestCharacter(player, id, s.cursor, player.dimension);
-                if (ok) n++;
-            }
-            bar(player, `§a${squad.name}: ${n} deployed`);
-            return;
-        }
-        default:
+// The squad of the waifu under the cursor, else the next squad with members.
+export function rtsSelectSquad(player) {
+    const s = needState(player);
+    const id = s.target ? identifyCharacter(s.target) : null;
+    const hers = id?.ownerId === player.id ? getCharacter(player, id.characterId)?.squadId : null;
+    const squads = readSquads(player).filter(q => q.memberIds.length);
+    if (!squads.length) throw new Error("You have no squads with members.");
+    if (hers) s.squadId = hers;
+    else {
+        const i = squads.findIndex(q => q.id === s.squadId);
+        s.squadId = squads[(i + 1) % squads.length].id;
     }
+    const q = getSquad(player, s.squadId);
+    bar(player, `§bSelected: ${q.name} (${squadMembers(player, s).length}/${q.memberIds.length} in the field)`);
+}
+
+export function rtsNextFormation(player) {
+    const s = needState(player);
+    const i = FORMATION_TYPES.indexOf(s.formation);
+    s.formation = FORMATION_TYPES[(i + 1) % FORMATION_TYPES.length];
+    bar(player, `§bFormation: ${s.formation} - Move Here uses it`);
+}
+
+export function rtsMove(player) {
+    const s = needState(player);
+    const squad = needSquad(player, s);
+    if (!s.cursor) throw new Error("Aim at the ground first.");
+    const members = squadMembers(player, s);
+    if (!members.length) throw new Error(`${squad.name} has nobody in the field - Summon Squad Here.`);
+    lockAndHold(player, members);
+    const c = members.reduce((a, m) => ({ x: a.x + m.entity.location.x / members.length, z: a.z + m.entity.location.z / members.length }), { x: 0, z: 0 });
+    const len = Math.hypot(s.cursor.x - c.x, s.cursor.z - c.z) || 1;
+    const heading = { x: (s.cursor.x - c.x) / len, y: 0, z: (s.cursor.z - c.z) / len };
+    const started = executeFormation(s.formation, player.dimension, s.cursor, heading, s.cursor, members);
+    bar(player, `§a${squad.name}: ${s.formation} at ${Math.floor(s.cursor.x)}, ${Math.floor(s.cursor.z)} (${started}/${members.length})`);
+}
+
+export function rtsAttack(player) {
+    const s = needState(player);
+    const squad = needSquad(player, s);
+    if (!s.target) throw new Error("Aim at a mob first.");
+    if (identifyCharacter(s.target)) throw new Error("That's a waifu, not a target.");
+    const members = squadMembers(player, s);
+    if (!members.length) throw new Error(`${squad.name} has nobody in the field.`);
+    lockAndHold(player, members);
+    const desc = startHunt(members, s.target, msg => say(player, msg));
+    bar(player, desc ? `§6${squad.name} hunting: ${desc}` : "§cCouldn't start the attack.");
+}
+
+export function rtsSurround(player) {
+    const s = needState(player);
+    if (!s.target || identifyCharacter(s.target)) throw new Error("Aim at a mob first.");
+    const n = envelopTarget(player, s.target);
+    bar(player, n ? `§6${n} squad(s) surrounding the ${s.target.typeId.replace("minecraft:", "")}` : "§cNo squads in the field.");
+}
+
+export function rtsSummonHere(player) {
+    const s = needState(player);
+    const squad = needSquad(player, s);
+    if (!s.cursor) throw new Error("Aim at the ground first.");
+    let n = 0;
+    for (const id of squad.memberIds) {
+        const rec = getCharacter(player, id);
+        if (!rec) continue;
+        const ok = live(rec.manifestedEntityId)
+            ? teleportToMe(player, id, s.cursor, player.dimension)
+            : manifestCharacter(player, id, s.cursor, player.dimension);
+        if (ok) n++;
+    }
+    bar(player, `§a${squad.name}: ${n} deployed`);
 }
 
 // ---- exit / restore ------------------------------------------------------------------------------
@@ -336,7 +330,7 @@ function restore(player) {
     try { player.camera.clear(); } catch (e) { /* fine */ }
     try { player.inputPermissions.setPermissionCategory(InputPermissionCategory.Movement, true); } catch (e) { /* fine */ }
     for (const fx of EFFECTS) { try { player.removeEffect(fx); } catch (e) { /* fine */ } }
-    if (!st) { stripCommandItems(player); return; }
+    if (!st) { runExitHooks(player); return; }
     busy.add(player.id);
     try { player.teleport(st.loc, { dimension: world.getDimension(st.dim), rotation: st.rot }); } catch (e) { /* fine */ }
     let tries = 0;
@@ -356,7 +350,7 @@ function restore(player) {
                 if (!backup) {
                     say(player, "§c[Command mode] Your body double and backup are both gone - your items couldn't be restored. Please report this.");
                     player.setDynamicProperty(DP_STATE, undefined);
-                    stripCommandItems(player);
+                    runExitHooks(player);
                     return;
                 }
                 items = backup.map(x => (x ? deserializeItem(x) : undefined));
@@ -367,6 +361,7 @@ function restore(player) {
             if (body) { body.getComponent("minecraft:inventory").container.clearAll(); body.remove(); }
             player.setDynamicProperty(DP_STATE, undefined);
             player.setDynamicProperty(DP_BACKUP, undefined);
+            runExitHooks(player);
             say(player, "§b[Command mode] Back in your body.");
         } catch (e) {
             say(player, `§c[Command mode] Couldn't restore your items yet - your body double still holds them. (${e?.message ?? e})`);
@@ -376,17 +371,6 @@ function restore(player) {
 
 // ---- wiring ----------------------------------------------------------------------------------------
 export function startRts() {
-    world.afterEvents.itemUse.subscribe(ev => {
-        const cmd = COMMANDS.get(ev.itemStack?.typeId);
-        if (!cmd) return;
-        const player = ev.source;
-        if (!active.has(player.id)) { stripCommandItems(player); return; }
-        try { runCommand(player, cmd); } catch (e) { bar(player, `§c${e?.message ?? e}`); }
-    });
-    // A command item never places or breaks anything.
-    world.beforeEvents.playerInteractWithBlock.subscribe(ev => { if (COMMANDS.has(ev.itemStack?.typeId)) ev.cancel = true; });
-    world.beforeEvents.playerBreakBlock.subscribe(ev => { if (COMMANDS.has(ev.itemStack?.typeId)) ev.cancel = true; });
-
     // Relog / respawn / reload while in RTS: restore.
     world.afterEvents.playerSpawn.subscribe(ev => {
         if (active.has(ev.player.id)) { stop(ev.player.id); }

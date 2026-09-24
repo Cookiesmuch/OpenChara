@@ -315,15 +315,31 @@ The satchel appears where the player looks, and their next right-click opens it.
 
 ## 8. RTS command mode
 
-`enterRts(player)` / `exitRts(player)` (also available as the built-in action `enterRts`). While active:
+`ui/rts.js` is pure mechanism - it has no items, no menu button, no idea how a player invokes anything. `enterRts(player)` / `exitRts(player)` do the camera and body-double swap; six standalone command functions do the rest: `rtsSelectSquad`, `rtsNextFormation`, `rtsMove`, `rtsAttack`, `rtsSurround`, `rtsSummonHere` (each throws a player-facing `Error` on a bad call - no squad selected, nothing under the cursor). While active:
 
 - **Body double:** holds a verified copy of the player's items, plus a serialized backup.
 - **Controls:** the player is invisible and protected; WASD pans a free camera, and jump/sneak raise or lower it.
-- **Cursor:** turning the head aims an in-world cursor.
-- **Orders:** hotbar items give orders: select squad, move here (in the chosen formation), attack/hunt, formation, surround, summon squad here, exit.
+- **Cursor:** turning the head aims an in-world cursor; `rtsAttack`/`rtsSurround` act on whatever's under it, `rtsMove`/`rtsSummonHere` on the ground point.
 - **Following:** characters on "follow" follow the body double.
 
-Exiting, relogging, dying or `/reload` all put the player back at their body with their items. `getRtsInfo(player)` feeds a HUD (Claude Waifus: `<hud id="rts">`).
+Exiting, relogging, dying or `/reload` all put the player back at their body with their items. `registerRtsExitHook(fn)` runs `fn(player)` on every one of those paths, not just a manual `exitRts()` - use it to clean up anything you gave the player for command mode. `getRtsInfo(player)` feeds a HUD.
+
+**Which item (or menu button, or chat command) triggers which command is invocation control - a project's own choice, not the engine's.** `ui/controlItems.js` is a small reusable helper for the common case (a locked hotbar loadout mapped to handlers):
+
+```js
+import { registerControlItem, setControlItems, clearControlItems, enterRts, exitRts, registerRtsExitHook, rtsMove, ... } from "../openchara/api.js";
+
+registerControlItem("myns:move_here", player => { try { rtsMove(player); } catch (e) { /* show e.message */ } });
+registerRtsExitHook(clearControlItems); // strip them on every exit path, not just a manual one
+
+function enterCommandMode(player) {
+    if (!enterRts(player)) return false;
+    setControlItems(player, { 1: "myns:move_here", 8: "myns:exit" });
+    return true;
+}
+```
+
+Claude Waifus' `PATCHES/scripts/rtsControls.js` is the reference wiring: its own 7 items (`bp/items/rts_*.json`), its own hotbar layout, its own `enterCommandMode`/`exitCommandMode`. A project can give the same commands to a completely different set of items, or skip the hotbar and drive `rtsMove()` etc. from its own menu - the engine doesn't care.
 
 ---
 

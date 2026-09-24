@@ -19,6 +19,7 @@ import "./ui/builtins.js"; // built-in UI providers + actions (registered at loa
 import { startHud } from "./ui/hud.js";
 import { startContainers } from "./ui/container.js";
 import { startRts } from "./ui/rts.js";
+import { startControlItems } from "./ui/controlItems.js";
 
 let started = false;
 
@@ -40,6 +41,7 @@ export function startOpenChara() {
     startHud();
     startContainers();
     startRts();
+    startControlItems();
 
     // Self-healing on join: a full integrity scan + repair (which also runs
     // pending schema migrations) for each player once when they join, and
