@@ -45,7 +45,9 @@ node tools/openchara.js build  "../My Project"   # write the packs to <project>/
 node tools/openchara.js export "../My Project"   # write <project>/dist/<Name> <version>.mcaddon
 ```
 
-`dev` watches both your project's `PATCHES/` and this engine folder, so a `git pull` here is picked up automatically too. Every build is validated before it's deployed: JSON is parsed, JS is syntax-checked, and every import is resolved. A broken build never reaches your game; one bad import would otherwise silently kill the whole script pack.
+`dev` watches both your project's `PATCHES/` and this engine folder, so a `git pull` here is picked up automatically too. Every build is validated before it's deployed: JSON is parsed, JS is syntax-checked, every import is resolved, and the compiled JSON UI is linted for known silent-failure patterns. A broken build never reaches your game; one bad import would otherwise silently kill the whole script pack.
+
+If something still misbehaves only in-game, `node tools/openchara.js log <projectDir>` reads Minecraft's own content log (JSON UI and entity errors never show up any other way) filtered to your project; add `--follow` to tail it live, `--all` to see every pack.
 
 After a script change, run `/reload` in-game. New entities, items or textures need you to rejoin the world.
 

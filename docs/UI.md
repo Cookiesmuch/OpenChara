@@ -327,7 +327,11 @@ Exiting, relogging, dying or `/reload` all put the player back at their body wit
 
 ---
 
-## 9. Testing
+## 9. Linting
+
+`node tools/openchara.js check <projectDir>` (and every `build`/`deploy`/`dev`) runs a JSON UI linter over everything under `ui/` in the resource pack - the compiler's own output and any raw JSON UI a project overlays by hand. It catches the "parses fine, does nothing in-game" mistakes: `>=` in a binding (Molang has no such operator), an empty `''` literal, `collection_index` with no ancestor `collection_name`, a `button` with no `collection_details` binding, and a `$variable` inside a `modifications`-injected subtree. A build fails rather than shipping one of these silently.
+
+## 10. Testing
 
 `tools/lib/mcstub.js` runs a built project's scripts in Node, with an in-memory stand-in for `@minecraft/server`. Its forms record what was put on them and can be answered by a script. Claude Waifus' `tests/ui-smoke.mjs` uses it to:
 

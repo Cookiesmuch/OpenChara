@@ -11,6 +11,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { lintJsonUi } = require("./lintjsonui.js");
 
 function exportsOf(src) {
     const out = new Set();
@@ -32,6 +33,10 @@ function checkTree(map, label) {
         try { JSON.parse(map.get(rel).toString("utf8").replace(/^﻿/, "")); }
         catch (e) { errors.push(`${label}/${rel}: invalid JSON (${e.message})`); }
     }
+
+    // JSON UI (resource pack ui/**) has silent-failure footguns that parse
+    // fine and just do nothing in-game - lint them (see docs/UI.md).
+    errors.push(...lintJsonUi(map, label));
 
     const scripts = files.filter(f => f.endsWith(".js"));
     if (scripts.length) {
