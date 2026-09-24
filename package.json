@@ -1,0 +1,11 @@
+{
+  "name": "openchara",
+  "version": "0.1.0",
+  "description": "Open character framework for Minecraft Bedrock add-ons: character database, squads, tactical AI, progression and UI base - content comes from project PATCHES.",
+  "private": true,
+  "bin": { "openchara": "tools/openchara.js" },
+  "scripts": {
+    "check-engine": "node -e \"for (const f of require('fs').readdirSync('engine/scripts/openchara')) if (f.endsWith('.js')) require('child_process').execFileSync(process.execPath, ['--check', 'engine/scripts/openchara/' + f], { stdio: 'inherit' })\""
+  },
+  "engines": { "node": ">=18" }
+}

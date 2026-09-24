@@ -1,0 +1,4 @@
+item.{{ns}}:{{char}}_codex.name={{Char}} Codex
+item.{{ns}}:summon_scroll.name=Summoning Scroll
+item.{{ns}}:soul_token.name=Soul Token
+entity.{{ns}}:{{char}}.name={{Char}}

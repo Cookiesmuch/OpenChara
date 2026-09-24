@@ -1,0 +1,356 @@
+{
+  "format_version": "1.21.10",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "{{ns}}:{{char}}",
+      "is_spawnable": false,
+      "is_summonable": true,
+      "is_experimental": false,
+      "properties": {
+        "{{ns}}:species_index": {
+          "type": "int",
+          "range": [
+            0,
+            15
+          ],
+          "default": 0,
+          "client_sync": true
+        }
+      }
+    },
+    "component_groups": {
+      "{{ns}}:despawn": {
+        "minecraft:instant_despawn": {}
+      },
+      "{{ns}}:wander": {
+        "minecraft:behavior.random_stroll": {
+          "priority": 6,
+          "speed_multiplier": 0.8
+        }
+      },
+      "{{ns}}:melee": {
+        "minecraft:behavior.nearest_attackable_target": {
+          "priority": 2,
+          "reselect_targets": true,
+          "within_radius": 16,
+          "must_see": true,
+          "entity_types": [
+            {
+              "filters": {
+                "any_of": [
+                  {
+                    "all_of": [
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "value": "monster"
+                      },
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "operator": "!=",
+                        "value": "creeper"
+                      }
+                    ]
+                  },
+                  {
+                    "all_of": [
+                      {
+                        "any_of": [
+                          {
+                            "test": "has_tag",
+                            "subject": "other",
+                            "value": "{{ns}}_hunt_target"
+                          },
+                          {
+                            "test": "has_tag",
+                            "subject": "other",
+                            "value": "{{ns}}_owner_enemy"
+                          }
+                        ]
+                      },
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "operator": "!=",
+                        "value": "player"
+                      },
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "operator": "!=",
+                        "value": "{{ns}}_{{char}}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "max_dist": 16
+            }
+          ]
+        },
+        "minecraft:behavior.melee_attack": {
+          "priority": 3,
+          "speed_multiplier": 1.2,
+          "track_target": true
+        }
+      },
+      "{{ns}}:ranged": {
+        "minecraft:behavior.nearest_attackable_target": {
+          "priority": 2,
+          "reselect_targets": true,
+          "within_radius": 16,
+          "must_see": true,
+          "entity_types": [
+            {
+              "filters": {
+                "any_of": [
+                  {
+                    "test": "is_family",
+                    "subject": "other",
+                    "value": "monster"
+                  },
+                  {
+                    "all_of": [
+                      {
+                        "any_of": [
+                          {
+                            "test": "has_tag",
+                            "subject": "other",
+                            "value": "{{ns}}_hunt_target"
+                          },
+                          {
+                            "test": "has_tag",
+                            "subject": "other",
+                            "value": "{{ns}}_owner_enemy"
+                          }
+                        ]
+                      },
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "operator": "!=",
+                        "value": "player"
+                      },
+                      {
+                        "test": "is_family",
+                        "subject": "other",
+                        "operator": "!=",
+                        "value": "{{ns}}_{{char}}"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "max_dist": 16
+            }
+          ]
+        },
+        "minecraft:shooter": {
+          "def": "minecraft:arrow"
+        },
+        "minecraft:behavior.ranged_attack": {
+          "priority": 3,
+          "attack_interval_min": 1.2,
+          "attack_interval_max": 2.2,
+          "attack_radius": 15
+        }
+      }
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "{{ns}}_{{char}}"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 0.6,
+        "height": 1.9
+      },
+      "minecraft:health": {
+        "value": 40,
+        "max": 40
+      },
+      "minecraft:physics": {},
+      "minecraft:pushable": {
+        "is_pushable": true,
+        "is_pushable_by_piston": true
+      },
+      "minecraft:nameable": {},
+      "minecraft:damage_sensor": {
+        "triggers": {
+          "cause": "fall",
+          "deals_damage": false
+        }
+      },
+      "minecraft:equippable": {
+        "slots": [
+          {
+            "slot": "slot.weapon.mainhand",
+            "accepted_items": [
+              "minecraft:wooden_sword",
+              "minecraft:stone_sword",
+              "minecraft:iron_sword",
+              "minecraft:golden_sword",
+              "minecraft:diamond_sword",
+              "minecraft:netherite_sword",
+              "minecraft:bow",
+              "minecraft:crossbow"
+            ]
+          },
+          {
+            "slot": "slot.weapon.offhand",
+            "accepted_items": [
+              "minecraft:shield"
+            ]
+          },
+          {
+            "slot": "slot.armor.head",
+            "accepted_items": [
+              "minecraft:leather_helmet",
+              "minecraft:chainmail_helmet",
+              "minecraft:iron_helmet",
+              "minecraft:golden_helmet",
+              "minecraft:diamond_helmet",
+              "minecraft:netherite_helmet"
+            ]
+          },
+          {
+            "slot": "slot.armor.chest",
+            "accepted_items": [
+              "minecraft:leather_chestplate",
+              "minecraft:chainmail_chestplate",
+              "minecraft:iron_chestplate",
+              "minecraft:golden_chestplate",
+              "minecraft:diamond_chestplate",
+              "minecraft:netherite_chestplate",
+              "minecraft:elytra"
+            ]
+          },
+          {
+            "slot": "slot.armor.legs",
+            "accepted_items": [
+              "minecraft:leather_leggings",
+              "minecraft:chainmail_leggings",
+              "minecraft:iron_leggings",
+              "minecraft:golden_leggings",
+              "minecraft:diamond_leggings",
+              "minecraft:netherite_leggings"
+            ]
+          },
+          {
+            "slot": "slot.armor.feet",
+            "accepted_items": [
+              "minecraft:leather_boots",
+              "minecraft:chainmail_boots",
+              "minecraft:iron_boots",
+              "minecraft:golden_boots",
+              "minecraft:diamond_boots",
+              "minecraft:netherite_boots"
+            ]
+          }
+        ]
+      },
+      "minecraft:inventory": {
+        "container_type": "inventory",
+        "inventory_size": 36,
+        "private": true,
+        "restrict_to_owner": false
+      },
+      "minecraft:navigation.walk": {
+        "can_path_over_water": true,
+        "can_pass_doors": true,
+        "can_open_doors": true,
+        "can_jump": true,
+        "avoid_damage_blocks": true
+      },
+      "minecraft:movement.basic": {},
+      "minecraft:jump.static": {},
+      "minecraft:movement": {
+        "value": 0.25
+      },
+      "minecraft:behavior.float": {
+        "priority": 0
+      },
+      "minecraft:behavior.look_at_player": {
+        "priority": 7,
+        "look_distance": 8,
+        "probability": 0.02
+      },
+      "minecraft:conditional_bandwidth_optimization": {},
+      "minecraft:can_climb": {},
+      "minecraft:attack": {
+        "damage": 4
+      },
+      "minecraft:behavior.hurt_by_target": {
+        "priority": 1,
+        "entity_types": {
+          "filters": {
+            "all_of": [
+              {
+                "test": "is_family",
+                "subject": "other",
+                "operator": "!=",
+                "value": "player"
+              },
+              {
+                "test": "is_family",
+                "subject": "other",
+                "operator": "!=",
+                "value": "{{ns}}_{{char}}"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "events": {
+      "{{ns}}:wander_on": {
+        "add": {
+          "component_groups": [
+            "{{ns}}:wander"
+          ]
+        }
+      },
+      "{{ns}}:wander_off": {
+        "remove": {
+          "component_groups": [
+            "{{ns}}:wander"
+          ]
+        }
+      },
+      "minecraft:entity_spawned": {
+        "add": {
+          "component_groups": [
+            "{{ns}}:wander",
+            "{{ns}}:melee"
+          ]
+        }
+      },
+      "{{ns}}:role_melee": {
+        "add": {
+          "component_groups": [
+            "{{ns}}:melee"
+          ]
+        },
+        "remove": {
+          "component_groups": [
+            "{{ns}}:ranged"
+          ]
+        }
+      },
+      "{{ns}}:role_ranged": {
+        "add": {
+          "component_groups": [
+            "{{ns}}:ranged"
+          ]
+        },
+        "remove": {
+          "component_groups": [
+            "{{ns}}:melee"
+          ]
+        }
+      }
+    }
+  }
+}
