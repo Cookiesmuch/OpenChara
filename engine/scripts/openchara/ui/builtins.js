@@ -26,7 +26,7 @@
 //   setCaptain(sq, id) squadSummon(sq) squadRecall(sq) squadOrder(sq, o)
 //   formation(sq, type) breach(sq) hunt(sq) surround()
 //   restore(id) purge(id) repair() importBackup()
-//   toggleHud(hudId) toggleAutoTactics() setLanguage(id) startQuest(id, questId) turnInQuest(id, questId)
+//   enterRts() toggleHud(hudId) toggleAutoTactics() setLanguage(id) startQuest(id, questId) turnInQuest(id, questId)
 
 import { world } from "@minecraft/server";
 import { registerUiProvider, registerUiAction, askText, confirm, choose } from "./runtime.js";
@@ -56,6 +56,7 @@ import { QUESTS } from "../quests.js";
 import { setHudEnabled, isHudEnabled, listHuds } from "./hud.js";
 import { listLanguages, getPlayerLanguage, setPlayerLanguage, languageName } from "./i18n.js";
 import { openBag } from "./bag.js";
+import { enterRts } from "./rts.js";
 import { N } from "../ids.js";
 
 function liveEntity(id) {
@@ -414,6 +415,11 @@ registerUiAction("importBackup", async player => {
 
 // ---- settings --------------------------------------------------------------------------------
 registerUiAction("toggleHud", (player, hudId) => { setHudEnabled(player, hudId, !isHudEnabled(player, hudId)); });
+// RTS command mode (rts.js) - the menu closes first.
+registerUiAction("enterRts", player => {
+    enterRts(player);
+    return { close: true };
+});
 registerUiAction("toggleAutoTactics", () => { setAutoTriggerEnabled(!isAutoTriggerEnabled()); });
 // setLanguage(id) - "" or no id follows the game language again.
 registerUiAction("setLanguage", (player, id) => { setPlayerLanguage(player, id || null); });

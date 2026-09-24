@@ -18,6 +18,7 @@ import { TAG } from "./ids.js";
 import "./ui/builtins.js"; // built-in UI providers + actions (registered at load)
 import { startHud } from "./ui/hud.js";
 import { startContainers } from "./ui/container.js";
+import { startRts } from "./ui/rts.js";
 
 let started = false;
 
@@ -38,6 +39,7 @@ export function startOpenChara() {
     registerSouls();
     startHud();
     startContainers();
+    startRts();
 
     // Self-healing on join: a full integrity scan + repair (which also runs
     // pending schema migrations) for each player once when they join, and

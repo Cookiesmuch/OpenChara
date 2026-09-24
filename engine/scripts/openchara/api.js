@@ -70,6 +70,7 @@ export { characterView, askNickname } from "./ui/builtins.js";
 export { registerHudProvider, setHudEnabled, isHudEnabled, listHuds, showToast } from "./ui/hud.js";
 export { openContainer, closeContainer, isContainerOpen, markerItem, giveBack } from "./ui/container.js";
 export { openBag } from "./ui/bag.js";
+export { enterRts, exitRts, isInRts, getRtsInfo } from "./ui/rts.js";
 export { registerLanguage, listLanguages, getPlayerLanguage, setPlayerLanguage, translate } from "./ui/i18n.js";
 export { getMemberAxes } from "./fsm.js";
 export { getSquadPosture } from "./coordination.js";

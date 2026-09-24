@@ -60,6 +60,14 @@ function ensureInitialized(entity, record, order) {
     try { entity.triggerEvent(ranged ? `${NS}:role_ranged` : `${NS}:role_melee`); } catch (e) { /* fine */ }
 }
 
+// Where "follow" characters follow a player to, when that isn't the player
+// themselves (RTS mode: the player's body double, not the invisible player
+// riding under the camera). playerId -> { location, dimension }.
+const followOverrides = new Map();
+export function setFollowOverride(playerId, point) {
+    if (point) followOverrides.set(playerId, point); else followOverrides.delete(playerId);
+}
+
 function offsetAround(center, radius) {
     const a = Math.random() * Math.PI * 2;
     return { x: center.x + Math.cos(a) * radius, y: center.y, z: center.z + Math.sin(a) * radius };
@@ -76,21 +84,22 @@ function tickPlayer(player) {
         if (getTaskLock(entry.id, system.currentTick)) continue; // mid-maneuver (hunt/army) - hands off
 
         if (order === "follow") {
-            if (entity.dimension.id !== player.dimension.id) continue; // dimensionFollow handles portals
-            const d = Math.hypot(entity.location.x - player.location.x, entity.location.z - player.location.z);
+            const leader = followOverrides.get(player.id) ?? player;
+            if (entity.dimension.id !== leader.dimension.id) continue; // dimensionFollow handles portals
+            const d = Math.hypot(entity.location.x - leader.location.x, entity.location.z - leader.location.z);
             if (d > CATCHUP_TELEPORT) {
-                try { entity.teleport(offsetAround(player.location, 2), { dimension: player.dimension }); } catch (e) { /* unloaded */ }
+                try { entity.teleport(offsetAround(leader.location, 2), { dimension: leader.dimension }); } catch (e) { /* unloaded */ }
             } else if (d > FOLLOW_RANGE) {
                 const mine = followNavs.get(entity.id);
                 const navigating = isNavigating(entity);
                 if (navigating && !mine) continue; // someone else's move (formation/playbook) - leave it
                 const stale = mine && (system.currentTick - mine.startedAt > RENAV_AFTER_TICKS ||
-                    Math.hypot(mine.target.x - player.location.x, mine.target.z - player.location.z) > FOLLOW_RANGE);
+                    Math.hypot(mine.target.x - leader.location.x, mine.target.z - leader.location.z) > FOLLOW_RANGE);
                 if (!navigating || stale) {
-                    const t = offsetAround(player.location, 2);
-                    const target = { x: t.x, y: player.location.y, z: t.z };
+                    const t = offsetAround(leader.location, 2);
+                    const target = { x: t.x, y: leader.location.y, z: t.z };
                     followNavs.set(entity.id, { target, startedAt: system.currentTick });
-                    navigateToCoordinate(entity, target.x, target.y, target.z, player.dimension, () => followNavs.delete(entity.id));
+                    navigateToCoordinate(entity, target.x, target.y, target.z, leader.dimension, () => followNavs.delete(entity.id));
                 }
             } else if (followNavs.has(entity.id)) {
                 followNavs.delete(entity.id); // close enough - stop walking to the old target

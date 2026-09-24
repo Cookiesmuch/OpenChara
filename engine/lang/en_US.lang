@@ -1,3 +1,10 @@
 item.{{ns}}:soul_token.name=Soul Token
 entity.{{ns}}:{{char}}.name={{Char}}
 openchara.language.name=English
+item.{{ns}}:rts_select.name=Select Squad
+item.{{ns}}:rts_move.name=Move Here
+item.{{ns}}:rts_attack.name=Attack / Hunt
+item.{{ns}}:rts_formation.name=Formation
+item.{{ns}}:rts_surround.name=All Squads: Surround
+item.{{ns}}:rts_summon.name=Summon Squad Here
+item.{{ns}}:rts_exit.name=Exit Command Mode

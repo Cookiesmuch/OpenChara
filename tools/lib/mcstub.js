@@ -58,6 +58,12 @@ export class ItemStack {
     setLore(l) { this._lore = l ?? []; }
 }
 
+export const InputPermissionCategory = { Camera: 1, Movement: 2 };
+export const ItemLockMode = { inventory: "inventory", none: "none", slot: "slot" };
+export const EquipmentSlot = { Head: "Head", Chest: "Chest", Legs: "Legs", Feet: "Feet", Mainhand: "Mainhand", Offhand: "Offhand" };
+export const InputButton = { Jump: "Jump", Sneak: "Sneak" };
+export const ButtonState = { Pressed: "Pressed", Released: "Released" };
+
 export function makePlayer(id, name = id) {
     const p = new PropertyHolder();
     Object.assign(p, { id, name, typeId: "minecraft:player", messages: [], sendMessage(m) { this.messages.push(m); }, isValid: true });
