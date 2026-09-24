@@ -228,7 +228,7 @@ function parseAction(src, file, line) {
         }
         args.push(cur);
     }
-    const NAME_FIRST = new Set(["open", "call", "set", "action", "toggle"]);
+    const NAME_FIRST = new Set(["open", "replace", "call", "set", "action", "toggle"]);
     return {
         fn: m[1],
         args: args.map((a, idx) => (idx === 0 && NAME_FIRST.has(m[1]) && /^\s*[A-Za-z_][\w.:-]*\s*$/.test(a))

@@ -15,9 +15,12 @@
 //
 // Data a screen reads comes from a named PROVIDER (<screen data="name">),
 // registered by the engine or a project: fn(player, params, state) => object.
+// Actions and handlers are called fn(player, ...args) with `this` set to
+// { params, state } of the screen they were pressed on (use a non-arrow
+// function to read it); trailing arguments a screen leaves out are undefined.
 
 import { system } from "@minecraft/server";
-import { ActionFormData } from "@minecraft/server-ui";
+import { ActionFormData, ModalFormData, MessageFormData } from "@minecraft/server-ui";
 import { SCREENS, UI_HEADER } from "./screens.generated.js";
 import { TAG } from "../ids.js";
 
@@ -96,12 +99,13 @@ export function evaluate(ast, env) {
     }
 }
 
-function withLoops(env, loops) {
+export function withLoops(env, loops) {
     if (!loops?.length) return env;
     const scoped = Object.create(env);
-    for (const [name, listAst, index] of loops) {
+    for (const [name, listAst, index, indexName] of loops) {
         const list = evaluate(listAst, scoped);
         scoped[name] = Array.isArray(list) ? list[index] : undefined;
+        if (indexName) scoped[indexName] = index;
     }
     return scoped;
 }
@@ -110,11 +114,15 @@ const str = v => (v === undefined || v === null ? "" : typeof v === "number" && 
 
 // A text template -> plain string, or a RawMessage when it has translations
 // (the client localizes those into the player's game language).
+// A value that is itself a RawMessage ({ translate } / { rawtext }) - e.g. a
+// provider's localized string - is embedded as one.
+const isRaw = v => v !== null && typeof v === "object" && ("rawtext" in v || "translate" in v);
 function renderTemplate(parts, env) {
-    if (parts.every(p => p[0] !== "t")) return parts.map(p => (p[0] === "s" ? p[1] : str(evaluate(p[1], env)))).join("");
+    const values = parts.map(p => (p[0] === "e" ? evaluate(p[1], env) : null));
+    if (parts.every((p, i) => p[0] !== "t" && !isRaw(values[i]))) return parts.map((p, i) => (p[0] === "s" ? p[1] : str(values[i]))).join("");
     return {
-        rawtext: parts.map(p => (p[0] === "s" ? { text: p[1] }
-            : p[0] === "e" ? { text: str(evaluate(p[1], env)) }
+        rawtext: parts.map((p, i) => (p[0] === "s" ? { text: p[1] }
+            : p[0] === "e" ? (isRaw(values[i]) ? values[i] : { text: str(values[i]) })
                 : { translate: p[1], with: p[2].map(a => str(evaluate(a, env))) })),
     };
 }
@@ -138,7 +146,7 @@ function buildEnv(player, frame) {
             catch (e) { console.warn(`[${TAG}] UI provider "${screen.provider}" failed: ${e}`); }
         }
     }
-    return { ...data, params: frame.params, state: frame.state, player: { name: player.name } };
+    return { ...data, params: frame.params, state: frame.state, player: { name: player.name }, flash: frame.flash ?? null };
 }
 
 function buildForm(player, frame) {
@@ -172,82 +180,119 @@ function buildForm(player, frame) {
     return { form, env };
 }
 
+// A form can't open over chat or another screen ("UserBusy"): retry briefly.
+async function showForm(player, form) {
+    let res = { canceled: true };
+    for (let tries = 0; tries < 40; tries++) {
+        res = await form.show(player);
+        if (!(res.canceled && res.cancelationReason === "UserBusy")) break;
+        await new Promise(r => system.runTimeout(r, 5));
+    }
+    return res;
+}
+
 async function present(player, session) {
     const token = session.token = (session.token ?? 0) + 1;
     const frame = top(session);
     if (!frame) { sessions.delete(player.id); return; }
     if (!SCREENS[frame.key]) { console.warn(`[${TAG}] UI: unknown screen "${frame.key}"`); sessions.delete(player.id); return; }
 
+    frame.flash = session.flash ?? null; // a flash message shows once
+    session.flash = null;
     const { form, env } = buildForm(player, frame);
-    let res;
-    for (let tries = 0; tries < 40; tries++) {
-        res = await form.show(player);
-        if (!(res.canceled && res.cancelationReason === "UserBusy")) break;
-        await new Promise(r => system.runTimeout(r, 5));
-    }
+    frame.flash = null;
+    const res = await showForm(player, form);
     if (session.token !== token) return; // superseded by another present
     if (res.canceled || res.selection === undefined) { sessions.delete(player.id); return; }
 
     const field = SCREENS[frame.key].fields[res.selection];
     if (field?.k === "press") {
         const scoped = withLoops(env, field.loops);
-        await runAction(player, session, field.a, scoped);
+        for (const action of field.a) {
+            if (!await runAction(player, session, action, scoped)) break;
+        }
     }
-    if (sessions.get(player.id) === session && top(session)) system.run(() => present(player, session));
+    if (sessions.get(player.id) !== session) return;
+    if (top(session)) system.run(() => present(player, session));
+    else {
+        // Closed by the action: its message goes to chat instead.
+        sessions.delete(player.id);
+        if (session.flash) try { player.sendMessage(`${session.flash.error ? "§c" : "§d"}${session.flash.text}`); } catch (e) { /* offline */ }
+    }
 }
 
+// Runs one action; false when it failed (a sequence stops there).
 async function runAction(player, session, action, env) {
-    const args = action.args.map(a => evaluate(a, env));
-    const frame = top(session);
     try {
-        switch (action.fn) {
-            case "open": {
-                const [key, ...rest] = args;
-                const screen = SCREENS[key];
-                if (!screen) { console.warn(`[${TAG}] UI: open() of unknown screen "${key}"`); return; }
-                const params = {};
-                screen.params.forEach((name, i) => { params[name] = rest[i]; });
-                session.stack.push({ key, params, state: {} });
-                return;
-            }
-            case "replace": {
-                const [key, ...rest] = args;
-                const screen = SCREENS[key];
-                if (!screen) return;
-                const params = {};
-                screen.params.forEach((name, i) => { params[name] = rest[i]; });
-                session.stack[session.stack.length - 1] = { key, params, state: {} };
-                return;
-            }
-            case "back": session.stack.pop(); return;
-            case "close": session.stack.length = 0; return;
-            case "set": frame.state[args[0]] = args[1]; return;
-            case "toggle": frame.state[args[0]] = !frame.state[args[0]]; return;
-            case "call": {
-                const fn = handlers.get(args[0]);
-                if (!fn) { console.warn(`[${TAG}] UI: no handler "${args[0]}"`); return; }
-                const result = await fn(player, ...args.slice(1), { params: frame.params, state: frame.state });
-                applyResult(session, result);
-                return;
-            }
-            default: {
-                const fn = actions.get(action.fn);
-                if (!fn) { console.warn(`[${TAG}] UI: unknown action "${action.fn}"`); return; }
-                const result = await fn(player, ...args, { params: frame.params, state: frame.state });
-                applyResult(session, result);
-            }
-        }
+        await runActionInner(player, session, action, env);
+        return true;
     } catch (e) {
         console.warn(`[${TAG}] UI action "${action.fn}" failed: ${e}`);
-        try { player.sendMessage(`§c${e?.message ?? e}`); } catch (err) { /* offline */ }
+        if (session.stack.length) session.flash = { text: String(e?.message ?? e), error: true };
+        else try { player.sendMessage(`§c${e?.message ?? e}`); } catch (err) { /* offline */ }
+        return false;
+    }
+}
+
+async function runActionInner(player, session, action, env) {
+    const args = action.args.map(a => evaluate(a, env));
+    const frame = top(session);
+    switch (action.fn) {
+        case "open": {
+            const [key, ...rest] = args;
+            const screen = SCREENS[key];
+            if (!screen) { console.warn(`[${TAG}] UI: open() of unknown screen "${key}"`); return; }
+            const params = {};
+            screen.params.forEach((name, i) => { params[name] = rest[i]; });
+            session.stack.push({ key, params, state: {} });
+            return;
+        }
+        case "replace": {
+            const [key, ...rest] = args;
+            const screen = SCREENS[key];
+            if (!screen) return;
+            const params = {};
+            screen.params.forEach((name, i) => { params[name] = rest[i]; });
+            session.stack[session.stack.length - 1] = { key, params, state: {} };
+            return;
+        }
+        case "back": session.stack.pop(); return;
+        case "close": session.stack.length = 0; return;
+        case "set": frame.state[args[0]] = args[1]; return;
+        case "choose": return; // only meaningful in a choose() picker
+        case "toggle": frame.state[args[0]] = !frame.state[args[0]]; return;
+        case "call": {
+            const fn = handlers.get(args[0]);
+            if (!fn) { console.warn(`[${TAG}] UI: no handler "${args[0]}"`); return; }
+            const result = await fn.call({ params: frame.params, state: frame.state }, player, ...args.slice(1));
+            applyResult(session, result);
+            return;
+        }
+        default: {
+            const fn = actions.get(action.fn);
+            if (!fn) { console.warn(`[${TAG}] UI: unknown action "${action.fn}"`); return; }
+            const result = await fn.call({ params: frame.params, state: frame.state }, player, ...args);
+            applyResult(session, result);
+        }
     }
 }
 
 // A handler/action may steer navigation by returning { open: [key, ...args] },
-// { back: true } or { close: true }.
+// { replace: [key, ...args] }, { back: true } or { close: true }, and/or show
+// a one-time message on the next screen with { flash: "text" } (a string
+// result is shorthand for that; { error: "text" } shows it as a failure).
 function applyResult(session, result) {
+    if (typeof result === "string") result = { flash: result };
     if (!result || typeof result !== "object") return;
-    if (result.close) session.stack.length = 0;
+    if (Array.isArray(result.replace)) {
+        const [key, ...rest] = result.replace;
+        const screen = SCREENS[key];
+        if (screen) {
+            const params = {};
+            screen.params.forEach((name, i) => { params[name] = rest[i]; });
+            session.stack[session.stack.length - 1] = { key, params, state: {} };
+        }
+    } else if (result.close) session.stack.length = 0;
     else if (result.back) session.stack.pop();
     else if (Array.isArray(result.open)) {
         const [key, ...rest] = result.open;
@@ -257,6 +302,7 @@ function applyResult(session, result) {
         screen.params.forEach((name, i) => { params[name] = rest[i]; });
         session.stack.push({ key, params, state: {} });
     }
+    if (result.flash || result.error) session.flash = { text: String(result.flash ?? result.error), error: Boolean(result.error) };
 }
 
 // ---- public entry ----------------------------------------------------------------------
@@ -271,4 +317,64 @@ export function openScreen(player, key, ...args) {
     sessions.set(player.id, session);
     system.run(() => present(player, session));
     return true;
+}
+
+// ---- pickers, prompts, dialogue ------------------------------------------------------------
+// Handlers run while no form is open, so they can await these and then
+// return; the runtime re-shows the current screen afterwards.
+
+// Shows `key` once as a PICKER: pressing a control whose action is
+// choose(value) resolves to that value; anything else (back, close, the X)
+// resolves to null. Use it for confirmations, player pickers, dialogue.
+export async function choose(player, key, ...args) {
+    const screen = SCREENS[key];
+    if (!screen) { console.warn(`[${TAG}] UI: choose() of unknown screen "${key}"`); return null; }
+    const params = {};
+    screen.params.forEach((name, i) => { params[name] = args[i]; });
+    const frame = { key, params, state: {} };
+    const { form, env } = buildForm(player, frame);
+    const res = await showForm(player, form);
+    if (res.canceled || res.selection === undefined) return null;
+    const field = screen.fields[res.selection];
+    const pick = field?.k === "press" ? field.a.find(a => a.fn === "choose") : null;
+    if (!pick) return null;
+    const scoped = withLoops(env, field.loops);
+    return pick.args.length ? evaluate(pick.args[0], scoped) : true;
+}
+
+// Yes/no. Uses the project's "confirm" screen (params: title, body, yes, no,
+// danger) when it has one, else Minecraft's message box.
+export async function confirm(player, { title = "", body = "", yes = "OK", no = "Cancel", danger = false } = {}) {
+    if (SCREENS.confirm) return (await choose(player, "confirm", title, body, yes, no, danger)) === "yes";
+    const res = await showForm(player, new MessageFormData().title(title).body(body).button1(yes).button2(no));
+    return !res.canceled && res.selection === 0;
+}
+
+// One line of text (rename, paste an import string...). Minecraft's own text
+// box - custom screens can't take typing. null when cancelled.
+export async function askText(player, { title = "", label = "", placeholder = "", value = "" } = {}) {
+    const res = await showForm(player, new ModalFormData().title(title).textField(label, placeholder, { defaultValue: String(value ?? "") }));
+    if (res.canceled) return null;
+    return String(res.formValues?.[0] ?? "");
+}
+
+// A dropdown choice; resolves to the chosen index or null.
+export async function askChoice(player, { title = "", label = "", options = [] } = {}) {
+    const res = await showForm(player, new ModalFormData().title(title).dropdown(label, options.map(String)));
+    if (res.canceled) return null;
+    return res.formValues?.[0] ?? null;
+}
+
+// A dialogue line: { name, portrait, text, choices: [label...] } -> the
+// chosen index (or null). Uses the project's "dialogue" screen (params:
+// name, portrait, text, choices) when it has one.
+export async function dialogue(player, { name = "", portrait = "", text = "", choices = ["..."] } = {}) {
+    if (SCREENS.dialogue) {
+        const v = await choose(player, "dialogue", name, portrait, text, choices);
+        return typeof v === "number" ? v : null;
+    }
+    const form = new ActionFormData().title(name).body(text);
+    choices.forEach(c => form.button(String(c)));
+    const res = await showForm(player, form);
+    return res.canceled ? null : res.selection ?? null;
 }

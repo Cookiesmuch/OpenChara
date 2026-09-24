@@ -90,6 +90,23 @@ function matches(sel, node) {
     return sel.classes.every(c => classes.includes(c));
 }
 
+// on:press="a(x); back" - several actions run in order (stops at the first
+// that fails). Splits on ; outside quotes and brackets.
+function splitActions(src) {
+    const out = [];
+    let depth = 0, cur = "", q = null;
+    for (const ch of src) {
+        if (q) { cur += ch; if (ch === q) q = null; continue; }
+        if (ch === "'" || ch === '"') { q = ch; cur += ch; continue; }
+        if (ch === "(" || ch === "[") depth++;
+        if (ch === ")" || ch === "]") depth--;
+        if (ch === ";" && depth === 0) { if (cur.trim()) out.push(cur); cur = ""; continue; }
+        cur += ch;
+    }
+    if (cur.trim()) out.push(cur);
+    return out;
+}
+
 // ---- compiler ------------------------------------------------------------------------
 class ScreenCompiler {
     constructor(key, file, rules) {
@@ -97,8 +114,9 @@ class ScreenCompiler {
         this.file = file;
         this.rules = rules;
         this.fields = [];   // runtime table, index = form entry
-        this.defs = {};     // extra top-level JSON UI definitions (scroll contents)
+        this.defs = {};     // extra top-level JSON UI definitions (scroll contents, animations)
         this.n = 0;
+        this.ns = NS;
     }
 
     err(node, msg) { throw new UiSyntaxError(this.file, node?.line ?? 0, msg); }
@@ -134,7 +152,56 @@ class ScreenCompiler {
         if (st.layer) p.layer = parseInt(st.layer, 10);
         if (st.opacity) p.alpha = parseFloat(st.opacity);
         if (st.clip === "true") p.clips_children = true;
+        this.animate(st, p, e);
         return p;
+    }
+
+    // ---- animations (JSON UI anim_type alpha/offset, chained with "next") ----------
+    // They play when the control is created, i.e. every time the screen is
+    // shown - meant for reveals and attention pulses, not everyday screens.
+    //   fade-in: <duration> [delay]          0 -> opacity
+    //   slide-from: <dx> <dy> <duration> [delay]   from offset+(dx,dy) to offset
+    //   pulse: <period>                       loops alpha between 1 and 0.35
+    //   easing: linear | out-cubic | out-back | in-out-quad | ...
+    anim(def) {
+        const name = `anim_${this.key}_${this.n++}`;
+        this.defs[name] = def;
+        return `@${this.ns}.${name}`;
+    }
+    animate(st, p, e) {
+        const secs = v => {
+            const m = /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(String(v ?? "").trim());
+            if (!m) e(`time "${v}" - write e.g. 0.4s or 250ms`);
+            return m[2] === "ms" ? parseFloat(m[1]) / 1000 : parseFloat(m[1]);
+        };
+        const easing = (st.easing ?? "out-cubic").replace(/-/g, "_");
+        const target = p.alpha ?? 1;
+        let pulse = null;
+        if (st.pulse) {
+            const half = secs(st.pulse) / 2;
+            const a = `anim_${this.key}_${this.n++}`, b = `anim_${this.key}_${this.n++}`;
+            this.defs[a] = { anim_type: "alpha", easing: "in_out_quad", duration: half, from: 1, to: 0.35, next: `@${this.ns}.${b}` };
+            this.defs[b] = { anim_type: "alpha", easing: "in_out_quad", duration: half, from: 0.35, to: 1, next: `@${this.ns}.${a}` };
+            pulse = `@${this.ns}.${a}`;
+        }
+        if (st["fade-in"]) {
+            const [d, delay] = st["fade-in"].split(/\s+/);
+            const main = { anim_type: "alpha", easing, duration: secs(d), from: 0, to: target };
+            if (pulse) main.next = pulse;
+            let ref = this.anim(main);
+            if (delay) ref = this.anim({ anim_type: "alpha", easing: "linear", duration: secs(delay), from: 0, to: 0, next: ref });
+            p.alpha = ref;
+            p.propagate_alpha = true;
+        } else if (pulse) { p.alpha = pulse; p.propagate_alpha = true; }
+        if (st["slide-from"]) {
+            const [dx, dy, d, delay] = st["slide-from"].split(/\s+/);
+            const to = p.offset ?? [0, 0];
+            if (typeof to[0] !== "number" || typeof to[1] !== "number") e("slide-from needs a pixel offset (or none)");
+            const from = [to[0] + parseFloat(dx), to[1] + parseFloat(dy ?? "0")];
+            let ref = this.anim({ anim_type: "offset", easing, duration: secs(d ?? "0.4s"), from, to });
+            if (delay) ref = this.anim({ anim_type: "offset", easing: "linear", duration: secs(delay), from, to: from, next: ref });
+            p.offset = ref;
+        }
     }
 
     // Wraps `control` so it reads form entry `index`. The wrapper takes the
@@ -232,18 +299,21 @@ class ScreenCompiler {
     // Returns an array of [name, control] (each="" expands to several).
     emit(node, loops) {
         if (node.text !== undefined) this.err(node, `stray text "${node.text}" - put text inside <text>`);
-        if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")})`);
+        if (node.tag === "use") return this.use(node, loops);
+        if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")}, use)`);
 
         if (node.attrs.each && !node._expanded) {
-            const m = /^\s*([A-Za-z_]\w*)\s+in\s+(.+)$/.exec(String(node.attrs.each));
-            if (!m) this.err(node, `each="${node.attrs.each}" - write each="item in list"`);
+            const m = /^\s*([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s+in\s+(.+)$/.exec(String(node.attrs.each));
+            if (!m) this.err(node, `each="${node.attrs.each}" - write each="item in list" (or "item, i in list")`);
             const max = parseInt(node.attrs.max ?? "", 10);
             if (!(max > 0)) this.err(node, `each= needs max="N" - a compiled screen reserves room for at most N items`);
-            const listAst = parseExpr(m[2], this.file, node.line);
+            const listAst = parseExpr(m[3], this.file, node.line);
             const out = [];
             for (let k = 0; k < max; k++) {
                 const clone = { ...node, _expanded: true };
-                out.push(...this.emit(clone, [...loops, [m[1], listAst, k]]));
+                const loop = [m[1], listAst, k];
+                if (m[2]) loop.push(m[2]);
+                out.push(...this.emit(clone, [...loops, loop]));
             }
             return out;
         }
@@ -261,6 +331,23 @@ class ScreenCompiler {
             control = this.gate(this.field({ k: "vis", e, loops }), control);
         }
         return [[this.name(node.tag.slice(0, 3)), control]];
+    }
+
+    // <use t="name" var="value"/> pastes <template id="name">'s children,
+    // with every $var in their attributes and text replaced (unset -> "").
+    use(node, loops) {
+        const tpl = this.templates?.[node.attrs.t];
+        if (!tpl) this.err(node, `<use t="${node.attrs.t}"> - no <template id="${node.attrs.t}"> (templates: ${Object.keys(this.templates ?? {}).join(", ") || "none"})`);
+        const sub = v => String(v).replace(/\$([A-Za-z_]\w*)/g, (_, k) => (node.attrs[k] === undefined ? "" : String(node.attrs[k])));
+        const clone = n => (n.text !== undefined
+            ? { ...n, text: sub(n.text) }
+            : { ...n, attrs: Object.fromEntries(Object.entries(n.attrs).map(([k, v]) => [k, typeof v === "string" ? sub(v) : v])), children: n.children.map(clone) });
+        const out = [];
+        for (const c of tpl.children) {
+            if (c.text !== undefined) continue;
+            out.push(...this.emit(clone(c), loops));
+        }
+        return out;
     }
 
     children(node, loops) {
@@ -346,7 +433,7 @@ class ScreenCompiler {
                             anchor_to: "top_left", anchor_from: "top_left",
                             $show_background: false,
                             size: ["100%", "100%"],
-                            $scrolling_content: `${NS}.${this.key}_${defName}`,
+                            $scrolling_content: `${this.ns}.${this.key}_${defName}`,
                             $scroll_size: [5, "100% - 4px"],
                             $scrolling_pane_size: ["100% - 4px", "100% - 2px"],
                             $scrolling_pane_offset: [2, 0],
@@ -421,7 +508,7 @@ class ScreenCompiler {
                     if (st[colorKey]) img.color = hexColor(st[colorKey], e);
                     return img;
                 };
-                const press = this.field({ k: "press", a: parseAction(String(action), this.file, node.line), loops });
+                const press = this.field({ k: "press", a: splitActions(String(action)).map(a => parseAction(a, this.file, node.line)), loops });
                 const btn = {
                     type: "button", size: ["100%", "100%"],
                     sound_name: "random.click", sound_volume: 1.0,
@@ -470,6 +557,7 @@ class ScreenCompiler {
 const HUD_HEADER = "ocH|";
 
 class HudCompiler extends ScreenCompiler {
+    constructor(...a) { super(...a); this.ns = "oc_hud"; }
     hudKey(index) { return `${HUD_HEADER}${this.key}.${index}|`; }
 
     data(index) {
@@ -552,18 +640,29 @@ function compileUi(files) {
     const huds = {};
     const hudUi = { namespace: "oc_hud", root: { type: "panel", size: ["100%", "100%"], controls: [] } };
     const jsonUi = { namespace: NS, root: { type: "panel", size: ["100%", "100%"], controls: [] } };
-    for (const f of files.filter(f => f.rel.endsWith(".ui.html"))) {
-        const file = `ui/${f.rel}`;
-        const doc = parseMarkup(f.text, file);
+    const docs = files.filter(f => f.rel.endsWith(".ui.html")).map(f => ({ file: `ui/${f.rel}`, doc: parseMarkup(f.text, `ui/${f.rel}`) }));
+    const templates = {};
+    for (const { file, doc } of docs) {
+        for (const top of doc.children) {
+            if (top.tag !== "template") continue;
+            const id = String(top.attrs.id ?? "");
+            if (!id) throw new UiSyntaxError(file, top.line, "<template> needs an id");
+            if (templates[id]) throw new UiSyntaxError(file, top.line, `template "${id}" is defined twice`);
+            templates[id] = top;
+        }
+    }
+    for (const { file, doc } of docs) {
         for (const top of doc.children) {
             if (top.text !== undefined) throw new UiSyntaxError(file, top.line, "text outside <screen>");
-            if (top.tag === "hud") { compileHud(top, file, rules, huds, hudUi); continue; }
-            if (top.tag !== "screen") throw new UiSyntaxError(file, top.line, `top-level elements must be <screen> or <hud>, got <${top.tag}>`);
+            if (top.tag === "template") continue;
+            if (top.tag === "hud") { compileHud(top, file, rules, huds, hudUi, templates); continue; }
+            if (top.tag !== "screen") throw new UiSyntaxError(file, top.line, `top-level elements must be <screen>, <hud> or <template>, got <${top.tag}>`);
             const key = String(top.attrs.id ?? "");
             if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new UiSyntaxError(file, top.line, `<screen id="${key}"> - ids are lowercase letters, digits, _`);
             if (screens[key]) throw new UiSyntaxError(file, top.line, `screen "${key}" is defined twice`);
 
             const c = new ScreenCompiler(key, file, rules);
+            c.templates = templates;
             const [[, control]] = c.emit(top, []);
             jsonUi[`screen_${key}`] = control;
             Object.assign(jsonUi, c.defs);
@@ -603,14 +702,16 @@ function compileUi(files) {
 // <hud id="..." data="provider"> - its root sits in the HUD behind an
 // implicit visibility key (<id>.0) the runtime drives from the player's
 // HUD settings, so any HUD can be switched off per player.
-function compileHud(top, file, rules, huds, hudUi) {
+function compileHud(top, file, rules, huds, hudUi, templates) {
     const key = String(top.attrs.id ?? "");
     if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new UiSyntaxError(file, top.line, `<hud id="${key}"> - ids are lowercase letters, digits, _`);
     if (huds[key]) throw new UiSyntaxError(file, top.line, `hud "${key}" is defined twice`);
     const c = new HudCompiler(key, file, rules);
+    c.templates = templates;
     const rootIndex = c.field({ k: "vis", e: ["bool", true], root: true, loops: [] });
     const [[, control]] = c.emit({ ...top, tag: "panel" }, []);
     hudUi[`hud_${key}`] = c.gate(rootIndex, control);
+    Object.assign(hudUi, c.defs);
     hudUi.root.controls.push({ [`h_${key}`]: { type: "panel", size: ["100%", "100%"], controls: [{ [`content@oc_hud.hud_${key}`]: {} }] } });
     huds[key] = { provider: top.attrs.data ? String(top.attrs.data) : null, fields: c.fields };
 }

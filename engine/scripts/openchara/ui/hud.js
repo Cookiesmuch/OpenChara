@@ -13,7 +13,7 @@
 
 import { world, system } from "@minecraft/server";
 import { HUDS, HUD_HEADER } from "./screens.generated.js";
-import { evaluate, renderTemplateForHud } from "./runtime.js";
+import { evaluate, renderTemplateForHud, withLoops } from "./runtime.js";
 import { NS, TAG } from "../ids.js";
 
 const REFRESH_TICKS = 4;
@@ -41,15 +41,6 @@ function state(player) {
     return s;
 }
 
-function withLoops(env, loops) {
-    if (!loops?.length) return env;
-    const scoped = Object.create(env);
-    for (const [name, listAst, index] of loops) {
-        const list = evaluate(listAst, scoped);
-        scoped[name] = Array.isArray(list) ? list[index] : undefined;
-    }
-    return scoped;
-}
 
 function valueOf(field, env) {
     switch (field.k) {

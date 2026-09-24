@@ -330,7 +330,8 @@ function build(projectDir) {
     const uiFiles = walk(uiDir).filter(f => f.endsWith(".ui.html") || f.endsWith(".ui.css"))
         .map(rel => ({ rel, text: fs.readFileSync(path.join(uiDir, rel), "utf8") }));
     const ui = compileUi(uiFiles);
-    for (const [rel, obj] of Object.entries(ui.rp)) put(rp, rel, json(obj));
+    // Generated JSON UI is written minified: deeply nested, it is several times larger indented.
+    for (const [rel, obj] of Object.entries(ui.rp)) put(rp, rel, JSON.stringify(obj));
     put(bp, "scripts/openchara/ui/screens.generated.js", ui.runtime);
 
     // 5. content scripts

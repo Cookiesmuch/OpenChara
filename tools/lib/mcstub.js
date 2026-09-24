@@ -66,11 +66,28 @@ export function makePlayer(id, name = id) {
 }
 `;
 
+// Forms record what was put on them. show() asks globalThis.__formResponder
+// (form, player) for a response, else reports the form as cancelled.
 const UI_STUB = String.raw`
-class Form { constructor() { return new Proxy(this, { get: (t, p) => (p === "show" ? async () => ({ canceled: true }) : () => t) }); } }
-export class ActionFormData extends Form {}
-export class ModalFormData extends Form {}
-export class MessageFormData extends Form {}
+class Form {
+    constructor(kind) { this.kind = kind; this.titleText = ""; this.bodyText = ""; this.buttons = []; this.fields = []; }
+    title(t) { this.titleText = t; return this; }
+    body(t) { this.bodyText = t; return this; }
+    button(text, icon) { this.buttons.push({ text, icon }); return this; }
+    button1(t) { this.buttons[0] = { text: t }; return this; }
+    button2(t) { this.buttons[1] = { text: t }; return this; }
+    textField(label, placeholder, opts) { this.fields.push({ type: "text", label, placeholder, opts }); return this; }
+    dropdown(label, options, opts) { this.fields.push({ type: "dropdown", label, options, opts }); return this; }
+    toggle(label, opts) { this.fields.push({ type: "toggle", label, opts }); return this; }
+    slider(label, min, max, opts) { this.fields.push({ type: "slider", label, min, max, opts }); return this; }
+    async show(player) {
+        const r = globalThis.__formResponder?.(this, player);
+        return r ?? { canceled: true, cancelationReason: "UserClosed" };
+    }
+}
+export class ActionFormData extends Form { constructor() { super("action"); } }
+export class ModalFormData extends Form { constructor() { super("modal"); } }
+export class MessageFormData extends Form { constructor() { super("message"); } }
 `;
 
 function installStub(dir) {

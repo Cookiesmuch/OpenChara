@@ -62,8 +62,11 @@ export { pickHuntTarget, startHunt } from "./hunt.js";
 export { envelopTarget } from "./army.js";
 
 // ---- custom UI (PATCHES/ui/*.ui.html) ---------------------------------------------
-export { openScreen, hasScreen, registerUiProvider, registerUiHandler, registerUiAction, evaluate as evaluateUiExpression } from "./ui/runtime.js";
-export { characterView } from "./ui/builtins.js";
+export {
+    openScreen, hasScreen, registerUiProvider, registerUiHandler, registerUiAction, evaluate as evaluateUiExpression,
+    choose, confirm, askText, askChoice, dialogue,
+} from "./ui/runtime.js";
+export { characterView, askNickname } from "./ui/builtins.js";
 export { registerHudProvider, setHudEnabled, isHudEnabled, listHuds, showToast } from "./ui/hud.js";
 export { getMemberAxes } from "./fsm.js";
 export { getSquadPosture } from "./coordination.js";
