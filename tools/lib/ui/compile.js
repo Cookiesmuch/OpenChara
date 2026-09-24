@@ -190,6 +190,44 @@ class ScreenCompiler {
         };
     }
 
+    // ---- dynamic values: FORM mode (one form entry each) ------------------------------
+    dynText(label, index) {
+        return this.indexed(index, { ...label, text: "#form_button_text", bindings: [this.collectionRead()] });
+    }
+    dynTex(img, index) {
+        return this.indexed(index, {
+            ...img,
+            allow_debug_missing_texture: false,
+            bindings: [
+                this.collectionRead("#form_button_texture", "#texture"),
+                this.collectionRead("#form_button_texture_file_system", "#texture_file_system"),
+            ],
+        });
+    }
+    dynBar(fill, index, h, pad) {
+        const f = {
+            ...fill,
+            bindings: [
+                this.collectionRead(),
+                { binding_type: "view", source_property_name: "(#form_button_text - 0)", target_property_name: "#size_binding_x", binding_condition: "always" },
+                { binding_type: "view", source_property_name: `((#form_button_text = #form_button_text) * ${h})`, target_property_name: "#size_binding_y", binding_condition: "always" },
+            ],
+        };
+        return {
+            track: {
+                type: "stack_panel", orientation: "vertical", size: ["100%", "100%"], collection_name: COLLECTION,
+                controls: [{
+                    cell: {
+                        type: "panel", size: ["100%", "100%"], collection_index: index,
+                        controls: [{ unit: { type: "panel", size: [1, 1], anchor_from: "left_middle", anchor_to: "left_middle", offset: [pad, 0], controls: [{ fill: f }] } }],
+                    },
+                }],
+            },
+        };
+    }
+    gate(index, control) { return this.gated(index, control); }
+    pressAllowed() { return true; }
+
     // ---- elements ------------------------------------------------------------------------
     // Returns an array of [name, control] (each="" expands to several).
     emit(node, loops) {
@@ -220,7 +258,7 @@ class ScreenCompiler {
         if (node.attrs.if) conds.push(parseExpr(String(node.attrs.if), this.file, node.line));
         if (conds.length) {
             const e = conds.reduce((a, b) => ["bin", "&&", a, b]);
-            control = this.gated(this.field({ k: "vis", e, loops }), control);
+            control = this.gate(this.field({ k: "vis", e, loops }), control);
         }
         return [[this.name(node.tag.slice(0, 3)), control]];
     }
@@ -338,9 +376,7 @@ class ScreenCompiler {
                 if (scale !== 1) label.font_scale_factor = scale;
                 if (st["text-align"]) label.text_alignment = st["text-align"];
                 if (isStaticTemplate(parts)) return { ...label, text: parts.map(p => p[1]).join("") };
-                label.text = "#form_button_text";
-                label.bindings = [this.collectionRead()];
-                return this.indexed(this.field({ k: "text", t: parts, loops }), label);
+                return this.dynText(label, this.field({ k: "text", t: parts, loops }));
             }
             case "image":
             case "portrait": {
@@ -351,11 +387,7 @@ class ScreenCompiler {
                 if (st.color) img.color = hexColor(st.color, e);
                 if (st.nineslice) img.nineslice_size = parseInt(st.nineslice, 10);
                 if (isStaticTemplate(parts)) return { ...img, texture: parts.map(p => p[1]).join("") };
-                img.bindings = [
-                    this.collectionRead("#form_button_texture", "#texture"),
-                    this.collectionRead("#form_button_texture_file_system", "#texture_file_system"),
-                ];
-                return this.indexed(this.field({ k: "tex", t: parts, loops }), img);
+                return this.dynTex(img, this.field({ k: "tex", t: parts, loops }));
             }
             case "bar": {
                 const place = this.placement(st, node);
@@ -370,29 +402,15 @@ class ScreenCompiler {
                     color: hexColor(st["bar-color"], e),
                     anchor_from: "left_middle", anchor_to: "left_middle",
                     size: [0, h - pad * 2],
-                    bindings: [
-                        this.collectionRead(),
-                        { binding_type: "view", source_property_name: "(#form_button_text - 0)", target_property_name: "#size_binding_x", binding_condition: "always" },
-                        { binding_type: "view", source_property_name: `((#form_button_text = #form_button_text) * ${h - pad * 2})`, target_property_name: "#size_binding_y", binding_condition: "always" },
-                    ],
                 };
                 const valueAst = parseTemplate(String(node.attrs.value), this.file, node.line).find(p => p[0] === "e")?.[1];
                 if (!valueAst) e(`<bar value="..."> must be an expression in {braces}`);
                 const index = this.field({ k: "bar", e: valueAst, px: inner, loops });
-                frame.controls = [{
-                    track: {
-                        type: "stack_panel", orientation: "vertical", size: ["100%", "100%"], collection_name: COLLECTION,
-                        controls: [{
-                            cell: {
-                                type: "panel", size: ["100%", "100%"], collection_index: index,
-                                controls: [{ unit: { type: "panel", size: [1, 1], anchor_from: "left_middle", anchor_to: "left_middle", offset: [pad, 0], controls: [{ fill }] } }],
-                            },
-                        }],
-                    },
-                }];
+                frame.controls = [this.dynBar(fill, index, h - pad * 2, pad)];
                 return frame;
             }
             case "button": {
+                if (!this.pressAllowed()) e("<button> isn't possible on a HUD (the HUD never takes clicks)");
                 const action = node.attrs["on:press"];
                 if (!action) e(`<button> needs on:press="..."`);
                 const place = this.placement(st, node);
@@ -443,6 +461,87 @@ class ScreenCompiler {
     }
 }
 
+// ---- HUD mode ---------------------------------------------------------------------------
+// A HUD value can't ride a form: it rides the TITLE channel. Each value has
+// its own key (`ocH|<hud>.<n>|`); the runtime sends `key + value` titles, one
+// per tick per player (two titles in one tick: only the last is seen, UI-0),
+// and a "preserved title" data control inside the element keeps the last
+// value it saw for its key (wiki: preserve-title-texts, proven in UI-0).
+const HUD_HEADER = "ocH|";
+
+class HudCompiler extends ScreenCompiler {
+    hudKey(index) { return `${HUD_HEADER}${this.key}.${index}|`; }
+
+    data(index) {
+        const key = this.hudKey(index);
+        return {
+            d: {
+                type: "panel", size: [0, 0],
+                property_bag: { "#preserved_text": "" },
+                bindings: [
+                    { binding_name: "#hud_title_text_string" },
+                    { binding_name: "#hud_title_text_string", binding_name_override: "#preserved_text", binding_condition: "visibility_changed" },
+                    {
+                        binding_type: "view",
+                        source_property_name: `(not (#hud_title_text_string = #preserved_text) and not ((#hud_title_text_string - '${key}') = #hud_title_text_string))`,
+                        target_property_name: "#visible",
+                    },
+                ],
+            },
+        };
+    }
+    read(index, target, expr) {
+        return { binding_type: "view", source_control_name: "d", source_property_name: expr ?? `(#preserved_text - '${this.hudKey(index)}')`, target_property_name: target };
+    }
+
+    dynText(label, index) {
+        return { ...label, text: "#text", controls: [this.data(index)], bindings: [this.read(index, "#text")] };
+    }
+    dynTex(img, index) {
+        return { ...img, allow_debug_missing_texture: false, controls: [this.data(index)], bindings: [this.read(index, "#texture")] };
+    }
+    dynBar(fill, index, h, pad) {
+        const key = this.hudKey(index);
+        const f = {
+            ...fill,
+            controls: [this.data(index)],
+            bindings: [
+                this.read(index, "#size_binding_x", `((#preserved_text - '${key}') - 0)`),
+                this.read(index, "#size_binding_y", `((#preserved_text = #preserved_text) * ${h})`),
+            ],
+        };
+        return { unit: { type: "panel", size: [1, 1], anchor_from: "left_middle", anchor_to: "left_middle", offset: [pad, 0], controls: [{ fill: f }] } };
+    }
+    // The data control sits BESIDE the gated content: a hidden subtree
+    // wouldn't keep catching its own updates.
+    gate(index, control) {
+        const { size, anchor_from, anchor_to, offset, layer, ...rest } = control;
+        const wrap = { type: "panel", size };
+        if (anchor_from) Object.assign(wrap, { anchor_from, anchor_to });
+        if (offset) wrap.offset = offset;
+        if (layer !== undefined) wrap.layer = layer;
+        const key = this.hudKey(index);
+        return {
+            ...wrap,
+            controls: [
+                this.data(index),
+                {
+                    g: {
+                        ...rest, size: ["100%", "100%"],
+                        visible: "#visible",
+                        property_bag: { "#visible": false },
+                        bindings: [{
+                            binding_type: "view", source_control_name: "d", resolve_sibling_scope: true,
+                            source_property_name: `((#preserved_text - '${key}') = '1')`, target_property_name: "#visible",
+                        }],
+                    },
+                },
+            ],
+        };
+    }
+    pressAllowed() { return false; }
+}
+
 // ---- entry point ---------------------------------------------------------------------
 // files: [{ rel, text }] for *.ui.html and *.ui.css under PATCHES/ui.
 function compileUi(files) {
@@ -450,13 +549,16 @@ function compileUi(files) {
     for (const f of files.filter(f => f.rel.endsWith(".ui.css"))) rules.push(...parseCss(f.text, `ui/${f.rel}`));
 
     const screens = {};
+    const huds = {};
+    const hudUi = { namespace: "oc_hud", root: { type: "panel", size: ["100%", "100%"], controls: [] } };
     const jsonUi = { namespace: NS, root: { type: "panel", size: ["100%", "100%"], controls: [] } };
     for (const f of files.filter(f => f.rel.endsWith(".ui.html"))) {
         const file = `ui/${f.rel}`;
         const doc = parseMarkup(f.text, file);
         for (const top of doc.children) {
             if (top.text !== undefined) throw new UiSyntaxError(file, top.line, "text outside <screen>");
-            if (top.tag !== "screen") throw new UiSyntaxError(file, top.line, `top-level elements must be <screen>, got <${top.tag}>`);
+            if (top.tag === "hud") { compileHud(top, file, rules, huds, hudUi); continue; }
+            if (top.tag !== "screen") throw new UiSyntaxError(file, top.line, `top-level elements must be <screen> or <hud>, got <${top.tag}>`);
             const key = String(top.attrs.id ?? "");
             if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new UiSyntaxError(file, top.line, `<screen id="${key}"> - ids are lowercase letters, digits, _`);
             if (screens[key]) throw new UiSyntaxError(file, top.line, `screen "${key}" is defined twice`);
@@ -488,12 +590,29 @@ function compileUi(files) {
         }
     }
     return {
-        rp: { "ui/openchara/screens.json": jsonUi },
+        rp: { "ui/openchara/screens.json": jsonUi, "ui/openchara/hud.json": hudUi },
         runtime: `// GENERATED by OpenChara UI compiler from PATCHES/ui - do not edit.\n` +
             `export const UI_HEADER = ${JSON.stringify(HEADER)};\n` +
-            `export const SCREENS = ${JSON.stringify(screens)};\n`,
+            `export const SCREENS = ${JSON.stringify(screens)};\n` +
+            `export const HUD_HEADER = ${JSON.stringify(HUD_HEADER)};\n` +
+            `export const HUDS = ${JSON.stringify(huds)};\n`,
         stats: Object.fromEntries(Object.entries(screens).map(([k, s]) => [k, s.fields.length])),
     };
 }
 
-module.exports = { compileUi, HEADER };
+// <hud id="..." data="provider"> - its root sits in the HUD behind an
+// implicit visibility key (<id>.0) the runtime drives from the player's
+// HUD settings, so any HUD can be switched off per player.
+function compileHud(top, file, rules, huds, hudUi) {
+    const key = String(top.attrs.id ?? "");
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new UiSyntaxError(file, top.line, `<hud id="${key}"> - ids are lowercase letters, digits, _`);
+    if (huds[key]) throw new UiSyntaxError(file, top.line, `hud "${key}" is defined twice`);
+    const c = new HudCompiler(key, file, rules);
+    const rootIndex = c.field({ k: "vis", e: ["bool", true], root: true, loops: [] });
+    const [[, control]] = c.emit({ ...top, tag: "panel" }, []);
+    hudUi[`hud_${key}`] = c.gate(rootIndex, control);
+    hudUi.root.controls.push({ [`h_${key}`]: { type: "panel", size: ["100%", "100%"], controls: [{ [`content@oc_hud.hud_${key}`]: {} }] } });
+    huds[key] = { provider: top.attrs.data ? String(top.attrs.data) : null, fields: c.fields };
+}
+
+module.exports = { compileUi, HEADER, HUD_HEADER };

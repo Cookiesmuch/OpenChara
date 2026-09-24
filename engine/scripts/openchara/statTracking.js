@@ -149,7 +149,10 @@ function flushAll() {
             for (const [questId, state] of Object.entries(record.quests)) {
                 if (state.status !== "active") continue;
                 const done = tryCompleteQuest(owner, characterId, questId);
-                if (done) owner.sendMessage(`§6Quest complete: ${QUESTS[questId]?.title ?? questId} (${done.nickname})!`);
+                if (done) {
+                    owner.sendMessage(`§6Quest complete: ${QUESTS[questId]?.title ?? questId} (${done.nickname})!`);
+                    emit("questCompleted", { owner, characterId, questId, record: done });
+                }
             }
         }
         emit("flush", { owner, characterId, deltas });

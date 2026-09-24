@@ -13,6 +13,7 @@
 //   on("manifest", fn)     { owner, characterId, entity }
 //   on("despawn", fn)      { owner, characterId }
 //   on("flush", fn)        { owner, characterId, deltas }  (after queued counters are written)
+//   on("questCompleted", fn) { owner, characterId, questId, record }
 //
 // `owner` is the online Player, or null when they're offline.
 

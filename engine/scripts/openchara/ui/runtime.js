@@ -119,6 +119,8 @@ function renderTemplate(parts, env) {
     };
 }
 
+export const renderTemplateForHud = (parts, env) => renderTemplate(parts, env);
+
 // ---- per-player sessions -------------------------------------------------------------
 // playerId -> { stack: [{ key, params, state }], token }
 const sessions = new Map();

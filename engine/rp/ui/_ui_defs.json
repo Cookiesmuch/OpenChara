@@ -1,5 +1,6 @@
 {
   "ui_defs": [
-    "ui/openchara/screens.json"
+    "ui/openchara/screens.json",
+    "ui/openchara/hud.json"
   ]
 }
