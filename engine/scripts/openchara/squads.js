@@ -6,11 +6,12 @@
 
 import { readJsonProperty, writeJsonProperty, writeCharacter } from "./dataCore.js";
 import { getCharacter } from "./characterRecord.js";
+import { RULES } from "./rules.js";
 import { NS, N } from "./ids.js";
 
 const SQUADS_KEY = `${NS}:squads`;
-export const MAX_MEMBERS_PER_SQUAD = 10;
-export const MAX_SQUADS_PER_PLAYER = 5;
+export const MAX_MEMBERS_PER_SQUAD = RULES.maxSquadMembers;
+export const MAX_SQUADS_PER_PLAYER = RULES.maxSquads;
 
 function isValidSquadList(list) {
     if (!Array.isArray(list)) return false;

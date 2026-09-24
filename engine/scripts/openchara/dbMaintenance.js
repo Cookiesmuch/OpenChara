@@ -8,10 +8,13 @@
 // primary copy is gone entirely, is still found and recoverable.
 
 import { world } from "@minecraft/server";
-import { readJsonProperty, writeJsonProperty, readCharacter, writeCharacter, verifyChecksum, isValidCharacterRecord, CW_SCHEMA_VERSION } from "./dataCore.js";
+import { readJsonProperty, writeJsonProperty, readCharacter, writeCharacter, verifyChecksum, isValidCharacterRecord, ENGINE_SCHEMA_VERSION } from "./dataCore.js";
 import { readIndex, addToIndex, removeFromIndex, updateIndexEntry } from "./characterIndex.js";
 import { registerCharacterOwner, resolveCharacterOwnerId } from "./characterId.js";
-import { isPastGracePeriod, migrateCharacterIfNeeded, computeStats } from "./characterRecord.js";
+import { isPastGracePeriod, migrateCharacterIfNeeded, needsMigration } from "./characterRecord.js";
+import { staleDerivedFields, applyDerived } from "./hooks.js";
+import { projectPv, PROJECT_SCHEMA_VERSION } from "./schema.js";
+import { RULES } from "./rules.js";
 import { readSquads } from "./squads.js";
 import { replaceCounters } from "./counters.js";
 import { listBlockLinks, clearLinksFor } from "./blockLinks.js";
@@ -115,8 +118,8 @@ export function scanIntegrity(player, { repair = false } = {}) {
             if (repair) writeJsonProperty(world, `${NS}:mirror:${CHAR}:${id}`, rec, isValidCharacterRecord);
         }
 
-        if (rec.v < CW_SCHEMA_VERSION) {
-            note(id, nick, `schema v${rec.v} behind current v${CW_SCHEMA_VERSION}`, true);
+        if (needsMigration(rec)) {
+            note(id, nick, `schema v${rec.v}/pv${projectPv(rec)} behind current v${ENGINE_SCHEMA_VERSION}/pv${PROJECT_SCHEMA_VERSION}`, true);
             if (repair) rec = migrateCharacterIfNeeded(player, id) ?? rec;
         }
 
@@ -153,9 +156,11 @@ export function scanIntegrity(player, { repair = false } = {}) {
             note(id, nick, `cached squadId "${rec.squadId}" disagrees with squad list ("${trueSquadId}")`, true);
             patch.squadId = trueSquadId;
         }
-        if (JSON.stringify(computeStats(rec)) !== JSON.stringify(rec.stats)) {
-            note(id, nick, "cached stats stale", true);
-            patch.stats = computeStats(rec);
+        const stale = staleDerivedFields(rec);
+        if (stale.length > 0) {
+            note(id, nick, `cached ${stale.join(", ")} stale`, true);
+            const fresh = applyDerived({ ...rec });
+            for (const field of stale) patch[field] = fresh[field];
         }
         if (repair && Object.keys(patch).length > 0) writeCharacter(player, id, old => ({ ...old, ...patch }));
 
@@ -212,7 +217,7 @@ export function purgeCharacter(player, characterId) {
     const rec = readCharacter(player, characterId);
     if (!rec) return { ok: false, reason: `no such ${N.one}` };
     if (rec.deletedAt === null) return { ok: false, reason: "she hasn't been released" };
-    if (!isPastGracePeriod(rec)) return { ok: false, reason: "still inside the 30-day recovery window" };
+    if (!isPastGracePeriod(rec)) return { ok: false, reason: `still inside the ${RULES.trashGraceDays}-day recovery window` };
 
     for (const key of player.getDynamicPropertyIds()) {
         if (key.startsWith(`${NS}:${CHAR}:${characterId}:`) || key.startsWith(`${NS}:migrationBackup:${characterId}:`)) {

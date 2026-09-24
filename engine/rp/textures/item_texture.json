@@ -2,12 +2,6 @@
   "resource_pack_name": "{{ns}}",
   "texture_name": "atlas.items",
   "texture_data": {
-    "{{ns}}_{{char}}_codex": {
-      "textures": "textures/items/book_written"
-    },
-    "{{ns}}_summon_scroll": {
-      "textures": "textures/items/paper"
-    },
     "{{ns}}_soul_token": {
       "textures": "textures/items/heartofthesea_closed"
     }

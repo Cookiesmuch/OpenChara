@@ -14,7 +14,8 @@
 import { writeCharacter, isValidCharacterRecord, withChecksum, computeChecksum } from "./dataCore.js";
 import { addToIndex, isNicknameTaken, readIndex, removeFromIndex } from "./characterIndex.js";
 import { registerCharacterOwner, resolveCharacterOwnerId } from "./characterId.js";
-import { getCharacter, computeStats, MAX_ROSTER } from "./characterRecord.js";
+import { getCharacter, MAX_ROSTER } from "./characterRecord.js";
+import { applyDerived } from "./hooks.js";
 import { leaveSquad } from "./squads.js";
 import { readCounters, replaceCounters } from "./counters.js";
 import { NS, CHAR, N } from "./ids.js";
@@ -79,7 +80,7 @@ export function importCharacter(player, text, nicknameOverride = null) {
         deletedAt: null,
         _checksum: "",
     };
-    restored.stats = computeStats(restored);
+    applyDerived(restored);
     if (!isValidCharacterRecord(withChecksum(restored))) return { ok: false, reason: "Backup record failed validation - not imported." };
 
     // Authoritative record first, derived structures after (Section 1.5.2).

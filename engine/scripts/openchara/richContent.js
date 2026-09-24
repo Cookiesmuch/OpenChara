@@ -37,3 +37,20 @@ export function resolveChecklistState(block, progress = {}) {
         items: block.items.map(item => ({ ...item, checked: Boolean(progress[item.id]) })),
     };
 }
+
+// Renders blocks to one §-formatted text string for plain text surfaces
+// (forms, chat). `checked` = { checklistItemId: bool }.
+export function renderRichContent(blocks, checked = {}) {
+    const lines = [];
+    for (const b of blocks ?? []) {
+        switch (b.type) {
+            case "text": lines.push(b.value); break;
+            case "heading": lines.push(`§l${b.value}§r`); break;
+            case "bulletList": for (const i of b.items) lines.push(` • ${i}`); break;
+            case "numberedList": b.items.forEach((i, n) => lines.push(` ${n + 1}. ${i}`)); break;
+            case "checklist": for (const i of b.items) lines.push(` ${checked[i.id] ? "§a[x]" : "§7[ ]"} ${i.text}§r`); break;
+            default: break;
+        }
+    }
+    return lines.join("\n");
+}

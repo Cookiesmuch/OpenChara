@@ -1,14 +1,15 @@
-// CW data-integrity core: the copy-validate-commit write pattern (plan
+// Data-integrity core: the copy-validate-commit write pattern (plan
 // Section 1.5.1) and A/B deployment slots (Section 1.5.1a). Every read/write
 // of a character record goes through readCharacter()/writeCharacter() here - nothing
 // else in the codebase should touch the raw ":A"/":B"/":active" keys.
 
 import { world } from "@minecraft/server";
 import { NS, CHAR, N, TAG } from "./ids.js";
+import { recordProblem } from "./schema.js";
 
-// v2: added `order` ("follow" | "stay" | "wander" | "home") - migrated in
-// by characterRecord.js's MIGRATIONS[1], the first real use of Section 1.5.4.
-export const CW_SCHEMA_VERSION = 2;
+// The engine's own record schema version (core fields). v2 added `order`.
+// A project's fields have their own version (`pv`, schema.js).
+export { ENGINE_SCHEMA_VERSION } from "./schema.js";
 
 // ---- Generic checksum (Section 1.5.6) --------------------------------
 // Cheap, non-cryptographic. Computed over the JSON of the record with
@@ -68,30 +69,11 @@ export function writeJsonProperty(owner, key, value, validate) {
 }
 
 // ---- Character record shape validation ------------------------------------
-// Structural check only (required fields present, right coarse types) -
-// not a deep schema validator. Good enough to catch a botched write or
-// hand-edit before it's ever committed.
+// Structural check only, driven by the record schema (schema.js: engine core
+// fields + the project's declared fields), plus the checksum. Good enough
+// to catch a botched write or hand-edit before it's ever committed.
 export function isValidCharacterRecord(rec) {
-    if (!rec || typeof rec !== "object") return false;
-    const requiredStrings = ["nickname", "species", "soulId", "class"];
-    for (const f of requiredStrings) {
-        if (typeof rec[f] !== "string") return false;
-    }
-    const requiredNumbers = ["v", "rank", "eidolonLevel", "level", "xp", "skillPoints", "createdAt"];
-    for (const f of requiredNumbers) {
-        if (typeof rec[f] !== "number") return false;
-    }
-    if (!rec.stats || typeof rec.stats !== "object") return false;
-    if (!Array.isArray(rec.unlockedSkills)) return false;
-    if (!Array.isArray(rec.abilities)) return false;
-    if (!rec.resources || typeof rec.resources !== "object") return false;
-    if (!rec.relationships || typeof rec.relationships !== "object") return false;
-    if (!Array.isArray(rec.bondPartners)) return false;
-    if (!rec.story || typeof rec.story !== "object") return false;
-    if (!rec.quests || typeof rec.quests !== "object") return false;
-    if (!rec.gear || typeof rec.gear !== "object") return false;
-    if (!Array.isArray(rec.inventory)) return false;
-    return verifyChecksum(rec);
+    return recordProblem(rec) === null && verifyChecksum(rec);
 }
 
 // ---- A/B slot machinery for the character record (Section 1.5.1a) --------

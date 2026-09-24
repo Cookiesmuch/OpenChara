@@ -10,11 +10,9 @@ import { startCoordinationLoop } from "./coordinationTick.js";
 import { startPlaybookTriggerLoop } from "./playbookTriggers.js";
 import { startStatTracking } from "./statTracking.js";
 import { startOrderLoop } from "./orders.js";
-import { registerCodex } from "./codexMenu.js";
 import { runJoinMaintenance } from "./dbMaintenance.js";
 import { startHuntLoop } from "./hunt.js";
 import { startArmyLoop } from "./army.js";
-import { registerGifts } from "./gifts.js";
 import { registerSouls } from "./souls.js";
 import { TAG } from "./ids.js";
 
@@ -32,10 +30,8 @@ export function startOpenChara() {
     startPlaybookTriggerLoop();
     startStatTracking();
     startOrderLoop();
-    registerCodex();
     startHuntLoop();
     startArmyLoop();
-    registerGifts();
     registerSouls();
 
     // Self-healing on join: a full integrity scan + repair (which also runs

@@ -5,7 +5,8 @@
 
 import { world, system } from "@minecraft/server";
 import { getCharacter, setManifestedEntityId, applyDespawnSnapshot, getOrder } from "./characterRecord.js";
-import { queueStat } from "./counters.js";
+import { emit } from "./events.js";
+import { RULES } from "./rules.js";
 import { getSpeciesInfo } from "./speciesData.js";
 import { getClass } from "./classData.js";
 import { serializeGear, deserializeGear, serializeInventory, deserializeInventory } from "./itemSerializer.js";
@@ -33,7 +34,7 @@ function displayName(record) {
 // with her gear/inventory intact (statTracking.js triggers it), then can't
 // be re-manifested for KNOCKOUT_MS. Ephemeral by design (Section 8.11) - a
 // restart clearing a cooldown is harmless.
-export const KNOCKOUT_MS = 30000;
+export const KNOCKOUT_MS = RULES.knockoutSeconds * 1000;
 const knockedOutUntil = new Map(); // characterId -> epoch ms
 
 export function markKnockedOut(characterId) { knockedOutUntil.set(characterId, Date.now() + KNOCKOUT_MS); }
@@ -101,7 +102,7 @@ export function manifestCharacter(owner, characterId, location, dimension) {
     } catch (e) { console.warn(`[${TAG}] Failed to restore inventory for ${characterId}: ${e}`); }
 
     setManifestedEntityId(owner, characterId, entity.id);
-    queueStat(owner.id, characterId, "timesManifested", "total");
+    emit("manifest", { owner, characterId, entity });
     return entity;
 }
 
@@ -139,7 +140,7 @@ export function despawnCharacter(owner, characterId) {
     }
 
     if (entity) {
-        queueStat(owner.id, characterId, "timesDespawned", "total");
+        emit("despawn", { owner, characterId });
         // Deferred per Phase 0's own hard-won finding: entity.remove()
         // called synchronously inside certain event callbacks silently
         // doesn't take effect. Deferring to system.run() is cheap

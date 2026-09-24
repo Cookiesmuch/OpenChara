@@ -5,6 +5,7 @@ A project is any folder containing `PATCHES/`. Everything the built add-on conta
 ```
 PATCHES/
   project.json          required
+  database/schema.json  what each character's record stores (the engine only stores it)
   characters/*.json     character types (species)
   classes/*.json        classes: stats, growth, positioning, skill tree
   abilities/*.json      abilities
@@ -51,6 +52,42 @@ Text files in the engine templates may use placeholders that your `project.json`
 
 > **`namespace`, `character.key`, character `index` values and pack UUIDs are stored in players' worlds.** Changing any of them after release orphans existing saves.
 
+## The database: engine system, project data
+
+OpenChara's database *system* covers storage with A/B rollback slots, a checksummed mirror, integrity repair, the trash, backups, transfer, migrations, counters, bonds and quests. What each character *stores*, and how it grows, is the project's:
+
+**`database/schema.json`** declares the project's record fields. The engine builds blank records and validates stored ones from it, and never names a project field itself.
+
+```json
+{
+  "version": 1,
+  "fields": {
+    "level": { "type": "number", "default": 1 },
+    "relationships": { "type": "object", "default": { "trust": { "level": 0, "xp": 0 } } },
+    "stats": { "type": "object", "default": null }
+  },
+  "bondTracks": ["friendship", "rivalry"]
+}
+```
+
+Types are `string`, `number`, `boolean`, `object`, `array` or `any`, plus optional `"nullable"` and `"optional"`. The engine's core fields can't be redefined: identity, gear, inventory, squad, order, locations, quests and bond partners. Bump `version` and register a migration whenever the fields change.
+
+**`rules`** in `project.json` tune the engine's own mechanisms: `maxRoster`, `trashGraceDays`, `maxSquads`, `maxSquadMembers`, `knockoutHp`, `knockoutSeconds`, `combatWindowSeconds`.
+
+**Project scripts** plug the game design in through `api.js`:
+
+| Hook | Use |
+|---|---|
+| `registerDerivedField(field, fn)` | cached values the engine recomputes after every write (e.g. `stats`) |
+| `registerRecordInitializer(fn)` | adjust a brand-new record (starting abilities...) |
+| `registerTrackCurve(fn)` | xp needed per level for every `{ level, xp }` track |
+| `registerQuestReward(key, fn)` | what a quest `rewards` key does |
+| `registerConditionType(type, def)` | new quest/meter condition types |
+| `registerProjectMigration(fromVersion, fn)` | upgrade records when `schema.json` changes |
+| `on(event, fn)` | character events: `kill`, `damageDealt`, `damageTaken`, `knockedOut`, `death`, `second`, `manifest`, `despawn`, `flush` |
+
+Writes go through `updateCharacter(owner, id, mutate)`, `grantTracksXp(owner, id, { "path.to.track": xp })`, `grantBondXp(...)` and `queueStat(...)` / `incrementStat(...)` for counters.
+
 ## characters/\<id\>.json
 
 ```json
@@ -90,17 +127,15 @@ Text files in the engine templates may use placeholders that your `project.json`
 
 Descriptions use the **rich content** block format, an array of `{ "type": "text" | "heading" | "bulletList" | "numberedList" | "checklist", ... }` blocks.
 
-A quest's `conditions` use the shared condition registry:
+A quest's `conditions` use the shared condition registry. The engine ships only generic types:
 
 | type | kind | params |
 |---|---|---|
-| `counterThreshold` | poll | `category`, `subject`, `target` |
-| `relationshipLevel` | poll | `track`, `target` |
-| `onKill` | event | `target`, optional `subject` (mob type) |
-| `onDamageDealt` / `onDamageTaken` / `onHealingDone` | event | `target` |
-| `onTimeInCombat` | tick | `target` (seconds) |
+| `counterThreshold` | poll | `category`, `subject`, `target`: reads a counter the project records |
+| `recordValue` | poll | `path` (dotted, into the record), `target` |
+| `custom` | poll | `fn(ctx)`: JS-authored conditions only |
 
-Event and tick conditions count from when the quest is started. A quest's optional `species` list restricts which characters can take it. `rewards` may contain `skillPoints`, `rank`, `eidolonLevel`, `cutsceneUnlock`.
+Everything else is registered by the project with `registerConditionType`. For example, Claude Waifus adds `onKill`, `onDamageDealt`, `onTimeInCombat` (event/tick types over its own counters) and `relationshipLevel`. Event and tick conditions count from when the quest is started. A quest's optional `species` list restricts which characters can take it. Each key in `rewards` needs a handler the project registered with `registerQuestReward`.
 
 ## scripts/
 

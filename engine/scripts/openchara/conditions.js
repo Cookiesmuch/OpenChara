@@ -4,50 +4,51 @@
 // of every feature reinventing its own trigger format.
 //
 // Three kinds:
-//   poll  - reads data the schema already stores (counters, relationships);
-//           zero extra tracking.
+//   poll  - reads data the record/counters already store; zero extra tracking.
 //   event - accumulates from live gameplay deltas (statTracking.js's
 //           batched flush hands each character's deltas to eventAmount()); the
 //           running total lives in the consumer's own progress store (a
 //           quest's `progress` dict; later an ultimate's meter).
-//   tick  - same accumulation path, fed by a derived per-second counter
-//           (combatTime) rather than a discrete event.
+//   tick  - same accumulation path, fed by a per-second counter rather
+//           than a discrete event.
 // Unknown types always fail closed (false / 0), never throw.
 
 import { readCounter } from "./counters.js";
 import { TAG } from "./ids.js";
 
-// `amount(deltas, cond)` - how much one flush of counter deltas
-// ({ category: { subject: n } }) advances this condition.
-const sumCategory = (deltas, category, subject) => subject
-    ? (deltas[category]?.[subject] ?? 0)
-    : Object.values(deltas[category] ?? {}).reduce((a, b) => a + b, 0);
-
+// Engine types are generic; projects register their own (e.g. "onKill"
+// reading their own "kills" counter) with registerConditionType(). A def:
+//   { kind: "poll", check(ctx, cond) => bool }
+//   { kind: "event"|"tick", amount(deltas, cond) => number }   deltas = { category: { subject: n } }
+//   optional describe(ctx, cond, current) => string   (UI progress text)
 export const CONDITION_TYPES = {
-    onDamageDealt: { kind: "event", amount: (d, c) => sumCategory(d, "damageDealt", "total") * (c.rate ?? 1) },
-    onDamageTaken: { kind: "event", amount: (d, c) => sumCategory(d, "damageTaken", "total") * (c.rate ?? 1) },
-    onKill: { kind: "event", amount: (d, c) => sumCategory(d, "kills", c.subject) * (c.flatAmount ?? 1) },
-    // No healing abilities exist yet (Phase 10) - nothing queues
-    // healingDone, so this simply never advances until one does.
-    onHealingDone: { kind: "event", amount: (d, c) => sumCategory(d, "healingDone", "total") * (c.rate ?? 1) },
-    onTimeInCombat: { kind: "tick", amount: (d, c) => sumCategory(d, "combatTime", "seconds") * (c.rate ?? 1) },
-
     counterThreshold: {
         kind: "poll",
         check: (ctx, cond) => readCounter(ctx.owner, ctx.characterId, cond.category, cond.subject) >= cond.target,
     },
-    relationshipLevel: {
+    // Any numeric value in the record, by dotted path: { path: "level", target: 10 }.
+    recordValue: {
         kind: "poll",
-        check: (ctx, cond) => (ctx.character.relationships?.[cond.track]?.level ?? 0) >= cond.target,
+        check: (ctx, cond) => readPath(ctx.character, cond.path) >= cond.target,
+        describe: (ctx, cond) => `${cond.path}: ${Math.min(readPath(ctx.character, cond.path), cond.target)}/${cond.target}`,
     },
-    // Escape hatch: since this whole table is static code (never
-    // serialized per-character, per Section 1.0), a condition can hold a real
-    // function reference directly for anything too bespoke to generalize.
+    // Escape hatch: a condition authored in JS can hold a real function.
     custom: {
         kind: "poll",
         check: (ctx, cond) => Boolean(cond.fn?.(ctx)),
     },
 };
+
+export function registerConditionType(type, def) {
+    if (!def || !["poll", "event", "tick"].includes(def.kind)) throw new Error(`Condition type "${type}" needs kind poll|event|tick.`);
+    CONDITION_TYPES[type] = def;
+}
+
+function readPath(obj, path) {
+    let v = obj;
+    for (const k of String(path).split(".")) v = v?.[k];
+    return typeof v === "number" ? v : 0;
+}
 
 // Stable storage key for an event/tick condition's accumulated progress:
 // its explicit `id` if authored, else its position in the list.
@@ -82,17 +83,16 @@ export function evaluateAllConditions(ctx, conditions) {
     return Array.isArray(conditions) && conditions.every((c, i) => evaluateCondition(ctx, c, i));
 }
 
-// Human-readable progress for a UI ("zombie 4/10", "damage 120/500").
+// Human-readable progress for a UI ("zombie 4/10", "damage 120/500"). A
+// registered type's own describe() wins; otherwise a generic "current/target".
 export function describeProgress(ctx, cond, index, readCounterFn) {
     const def = CONDITION_TYPES[cond?.type];
     if (!def) return null;
+    const current = def.kind === "poll" ? null : Math.floor(ctx.progress?.[conditionKey(cond, index)] ?? 0);
+    try { if (def.describe) return def.describe(ctx, cond, current); } catch (e) { return null; }
     if (cond.type === "counterThreshold") {
-        return `${cond.subject.replace("minecraft:", "")}: ${Math.min(readCounterFn(cond.category, cond.subject), cond.target)}/${cond.target}`;
+        return `${String(cond.subject).replace("minecraft:", "")}: ${Math.min(readCounterFn(cond.category, cond.subject), cond.target)}/${cond.target}`;
     }
-    if (cond.type === "relationshipLevel") return `${cond.track} level ${Math.min(ctx.character.relationships?.[cond.track]?.level ?? 0, cond.target)}/${cond.target}`;
-    if (def.kind !== "poll") {
-        const label = { onKill: cond.subject ? `${cond.subject.replace("minecraft:", "")} kills` : "kills", onDamageDealt: "damage dealt", onDamageTaken: "damage taken", onHealingDone: "healing", onTimeInCombat: "seconds in combat" }[cond.type];
-        return `${label}: ${Math.min(Math.floor(ctx.progress?.[conditionKey(cond, index)] ?? 0), cond.target)}/${cond.target}`;
-    }
+    if (current !== null) return `${cond.type}: ${Math.min(current, cond.target)}/${cond.target}`;
     return null;
 }
