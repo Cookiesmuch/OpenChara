@@ -1,2 +1,3 @@
 item.{{ns}}:soul_token.name=Soul Token
 entity.{{ns}}:{{char}}.name={{Char}}
+openchara.language.name=English

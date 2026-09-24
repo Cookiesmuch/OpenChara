@@ -23,6 +23,7 @@ import { system } from "@minecraft/server";
 import { ActionFormData, ModalFormData, MessageFormData } from "@minecraft/server-ui";
 import { SCREENS, UI_HEADER } from "./screens.generated.js";
 import { TAG } from "../ids.js";
+import { getPlayerLanguage, translate, resolveRaw } from "./i18n.js";
 
 const providers = new Map();
 const handlers = new Map();
@@ -117,8 +118,16 @@ const str = v => (v === undefined || v === null ? "" : typeof v === "number" && 
 // A value that is itself a RawMessage ({ translate } / { rawtext }) - e.g. a
 // provider's localized string - is embedded as one.
 const isRaw = v => v !== null && typeof v === "object" && ("rawtext" in v || "translate" in v);
+// With a per-player language override (env.__lang) every translation is
+// resolved here instead, to a plain string (see i18n.js).
 function renderTemplate(parts, env) {
     const values = parts.map(p => (p[0] === "e" ? evaluate(p[1], env) : null));
+    const lang = env.__lang;
+    if (lang) {
+        return parts.map((p, i) => (p[0] === "s" ? p[1]
+            : p[0] === "e" ? (isRaw(values[i]) ? resolveRaw(lang, values[i]) : str(values[i]))
+                : translate(lang, p[1], p[2].map(a => str(evaluate(a, env)))))).join("");
+    }
     if (parts.every((p, i) => p[0] !== "t" && !isRaw(values[i]))) return parts.map((p, i) => (p[0] === "s" ? p[1] : str(values[i]))).join("");
     return {
         rawtext: parts.map((p, i) => (p[0] === "s" ? { text: p[1] }
@@ -146,7 +155,7 @@ function buildEnv(player, frame) {
             catch (e) { console.warn(`[${TAG}] UI provider "${screen.provider}" failed: ${e}`); }
         }
     }
-    return { ...data, params: frame.params, state: frame.state, player: { name: player.name }, flash: frame.flash ?? null };
+    return { ...data, params: frame.params, state: frame.state, player: { name: player.name }, flash: frame.flash ?? null, __lang: getPlayerLanguage(player) };
 }
 
 function buildForm(player, frame) {

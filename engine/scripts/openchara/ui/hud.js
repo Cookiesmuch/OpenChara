@@ -14,6 +14,7 @@
 import { world, system } from "@minecraft/server";
 import { HUDS, HUD_HEADER } from "./screens.generated.js";
 import { evaluate, renderTemplateForHud, withLoops } from "./runtime.js";
+import { getPlayerLanguage } from "./i18n.js";
 import { NS, TAG } from "../ids.js";
 
 const REFRESH_TICKS = 4;
@@ -62,7 +63,7 @@ function refreshPlayer(player) {
             if (!provide) continue;
             try { data = provide(player) ?? {}; } catch (e) { console.warn(`[${TAG}] HUD provider "${hud.provider}" failed: ${e}`); continue; }
         }
-        const env = { ...data, player: { name: player.name } };
+        const env = { ...data, player: { name: player.name }, __lang: getPlayerLanguage(player) };
         let reshown = false;
         hud.fields.forEach((f, i) => {
             const key = `${HUD_HEADER}${id}.${i}|`;

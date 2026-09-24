@@ -68,6 +68,7 @@ export {
 } from "./ui/runtime.js";
 export { characterView, askNickname } from "./ui/builtins.js";
 export { registerHudProvider, setHudEnabled, isHudEnabled, listHuds, showToast } from "./ui/hud.js";
+export { registerLanguage, listLanguages, getPlayerLanguage, setPlayerLanguage, translate } from "./ui/i18n.js";
 export { getMemberAxes } from "./fsm.js";
 export { getSquadPosture } from "./coordination.js";
 
