@@ -21,7 +21,7 @@
 //
 // Actions (usable in on:press; each returns a flash message for the next screen):
 //   summon(id) recall(id) teleport(id) order(id, o) summonAll() recallAll()
-//   rename(id) setHome(id) soulToken(id) release(id) give(id) exportBackup(id)
+//   rename(id) setHome(id) soulToken(id) release(id) give(id) exportBackup(id) openBag(id)
 //   createSquad([id]) renameSquad(sq) disbandSquad(sq) joinSquad(sq, id) leaveSquad(id)
 //   setCaptain(sq, id) squadSummon(sq) squadRecall(sq) squadOrder(sq, o)
 //   formation(sq, type) breach(sq) hunt(sq) surround()
@@ -55,6 +55,7 @@ import { setAutoTriggerEnabled, isAutoTriggerEnabled } from "../playbookTriggers
 import { QUESTS } from "../quests.js";
 import { setHudEnabled, isHudEnabled, listHuds } from "./hud.js";
 import { listLanguages, getPlayerLanguage, setPlayerLanguage, languageName } from "./i18n.js";
+import { openBag } from "./bag.js";
 import { N } from "../ids.js";
 
 function liveEntity(id) {
@@ -279,6 +280,14 @@ registerUiAction("give", async (player, id) => {
     if (!r.ok) throw new Error(r.reason);
     try { target.sendMessage(`§d${player.name} gave you ${r.nickname}!`); } catch (e) { /* left */ }
     return { back: true, flash: `${r.nickname} now belongs to ${target.name}.` };
+});
+// Her bag (gear + inventory) as a chest screen: a satchel appears where
+// the player looks; right-clicking it opens the bag.
+registerUiAction("openBag", (player, id) => {
+    const rec = needRecord(player, id);
+    openBag(player, id);
+    try { player.onScreenDisplay.setActionBar(`Right-click the bag to open ${rec.nickname}'s gear`); } catch (e) { /* fine */ }
+    return { close: true };
 });
 registerUiAction("exportBackup", async (player, id) => {
     const text = exportCharacter(player, need(id));

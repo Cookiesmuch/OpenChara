@@ -1,0 +1,24 @@
+{
+  "format_version": "1.21.10",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "{{ns}}:container",
+      "is_spawnable": false,
+      "is_summonable": true,
+      "is_experimental": false
+    },
+    "components": {
+      "minecraft:type_family": { "family": ["{{ns}}_container", "inanimate"] },
+      "minecraft:collision_box": { "width": 0.6, "height": 0.6 },
+      "minecraft:physics": { "has_gravity": false, "has_collision": false },
+      "minecraft:pushable": { "is_pushable": false, "is_pushable_by_piston": false },
+      "minecraft:health": { "value": 1000000, "max": 1000000 },
+      "minecraft:damage_sensor": { "triggers": { "deals_damage": false } },
+      "minecraft:knockback_resistance": { "value": 1.0 },
+      "minecraft:nameable": { "always_show": true, "allow_name_tag_renaming": false },
+      "minecraft:inventory": { "container_type": "container", "inventory_size": 27, "private": false },
+      "minecraft:persistent": {},
+      "minecraft:conditional_bandwidth_optimization": {}
+    }
+  }
+}

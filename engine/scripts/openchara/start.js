@@ -17,6 +17,7 @@ import { registerSouls } from "./souls.js";
 import { TAG } from "./ids.js";
 import "./ui/builtins.js"; // built-in UI providers + actions (registered at load)
 import { startHud } from "./ui/hud.js";
+import { startContainers } from "./ui/container.js";
 
 let started = false;
 
@@ -36,6 +37,7 @@ export function startOpenChara() {
     startArmyLoop();
     registerSouls();
     startHud();
+    startContainers();
 
     // Self-healing on join: a full integrity scan + repair (which also runs
     // pending schema migrations) for each player once when they join, and
