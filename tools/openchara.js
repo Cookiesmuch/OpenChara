@@ -7,6 +7,8 @@
 //   node tools/openchara.js deploy <projectDir>   build + sync into Minecraft's development pack folders
 //   node tools/openchara.js dev    <projectDir>   deploy, then watch the project's PATCHES and this
 //                                                engine for changes and redeploy automatically
+//   node tools/openchara.js log    <projectDir>   show this project's errors/warnings from Minecraft's
+//                                                newest content log (--all: every pack; --follow: keep tailing)
 //
 // <projectDir> is the folder containing PATCHES/ (defaults to the current
 // directory). Every build is validated first (JSON, JS syntax, imports);
@@ -108,8 +110,63 @@ function cmdDev(projectDir) {
     console.log(`[${stamp()}] Watching:\n  ${watched.join("\n  ")}\nChanges redeploy automatically. After a script change use /reload in-game; new entities/items/textures need a world rejoin. Ctrl+C to stop.`);
 }
 
+// ---- log: Minecraft's content log, filtered to this project ------------------------------
+// JSON UI and entity-definition errors never show in-game; they only land
+// in %APPDATA%/Minecraft Bedrock/logs/ContentLog*.txt. This shows the newest
+// log's errors and warnings that mention this project's packs or namespace
+// (or [Scripting]/[UI] lines), repeated lines collapsed.
+function logDir() {
+    const appdata = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+    const dirs = [path.join(appdata, "Minecraft Bedrock", "logs"), path.join(process.env.LOCALAPPDATA || "", "Packages", "Microsoft.MinecraftUWP_8wekyb3d8bbwe", "LocalState", "logs")];
+    return dirs.find(d => fs.existsSync(d)) ?? null;
+}
+function cmdLog(projectDir, flags) {
+    const dir = logDir();
+    if (!dir) throw new Error("Can't find Minecraft's logs folder.");
+    const newest = () => fs.readdirSync(dir).filter(f => /^ContentLog.*\.txt$/.test(f))
+        .map(f => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t)[0]?.f;
+    const file = newest();
+    if (!file) { console.log("No content log yet - enable Settings > Creator > Content Log File, then play."); return; }
+    let project = null;
+    try { project = require("./lib/build.js").loadProject(projectDir); } catch (e) { /* show everything */ }
+    const needles = project && !flags.includes("--all")
+        ? [project.packs.behavior.folder, project.packs.resource.folder, `${project.namespace}:`, "[Scripting]", "[UI]"]
+        : null;
+    const clean = l => l.replace(/%APPDATA%\/Minecraft Bedrock\/Users\/Shared\/games\/com\.mojang\/development_(behavior|resource)_packs\//g, "");
+    const show = text => {
+        const counts = new Map();
+        for (const raw of text.split(/\r?\n/)) {
+            if (!/\[(error|warning)\]/i.test(raw)) continue;
+            if (needles && !needles.some(n => raw.includes(n))) continue;
+            const key = clean(raw.replace(/^\d\d:\d\d:\d\d/, "")).trim();
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+        for (const [line, n] of counts) console.log(`${n > 1 ? `${String(n).padStart(3)}x ` : "     "}${line}`);
+        return counts.size;
+    };
+    const full = path.join(dir, file);
+    console.log(`${file}${needles ? ` (filtered to ${project.name}; --all for everything)` : ""}:`);
+    const n = show(fs.readFileSync(full, "utf8"));
+    if (!n) console.log("     no errors or warnings");
+    if (!flags.includes("--follow")) return;
+    let size = fs.statSync(full).size;
+    console.log(`[${stamp()}] following ${file} - Ctrl+C to stop`);
+    setInterval(() => {
+        const now = fs.statSync(full).size;
+        if (now <= size) return;
+        const fd = fs.openSync(full, "r");
+        const buf = Buffer.alloc(now - size);
+        fs.readSync(fd, buf, 0, buf.length, size);
+        fs.closeSync(fd);
+        size = now;
+        show(buf.toString("utf8"));
+    }, 1000);
+}
+
 function main() {
-    const [cmd, dirArg] = process.argv.slice(2);
+    const args = process.argv.slice(2);
+    const flags = args.filter(a => a.startsWith("--"));
+    const [cmd, dirArg] = args.filter(a => !a.startsWith("--"));
     const projectDir = path.resolve(dirArg ?? ".");
     try {
         switch (cmd) {
@@ -118,8 +175,9 @@ function main() {
             case "export": cmdExport(projectDir); break;
             case "deploy": cmdDeploy(projectDir); break;
             case "dev": cmdDev(projectDir); break;
+            case "log": cmdLog(projectDir, flags); break;
             default:
-                console.log("Usage: node tools/openchara.js <build|check|export|deploy|dev> [projectDir]");
+                console.log("Usage: node tools/openchara.js <build|check|export|deploy|dev|log> [projectDir]");
                 process.exitCode = cmd ? 1 : 0;
         }
     } catch (e) {
