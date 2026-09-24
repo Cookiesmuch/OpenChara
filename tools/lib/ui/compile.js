@@ -117,6 +117,7 @@ class ScreenCompiler {
         this.defs = {};     // extra top-level JSON UI definitions (scroll contents, animations)
         this.n = 0;
         this.ns = NS;
+        this.gateDepth = 0; // how many if=""/each ancestors are already between here and the nearest non-gated element
     }
 
     err(node, msg) { throw new UiSyntaxError(this.file, node?.line ?? 0, msg); }
@@ -355,12 +356,28 @@ class ScreenCompiler {
             return out;
         }
 
+        // The confirmed JSON UI quirk (see docs/UI.md) is specifically about
+        // a button nested inside an ancestor each="" - a real collection
+        // scope (collection_name/collection_index) - not a plain if="" (a
+        // visibility toggle with no collection involved at all, e.g. tab
+        // switching). Only each="" ancestors count toward gateDepth here.
+        const loopHere = node._expanded ? loops[loops.length - 1] : null;
+        const gatedHere = Boolean(loopHere) || Boolean(node.attrs.if);
+        if (gatedHere && node.tag === "button" && this.gateDepth > 0) {
+            this.err(node, `<button${node.attrs.if ? ` if="${node.attrs.if}"` : ""}${loopHere ? ` each="${node.attrs.each}"` : ""}> is gated while nested inside an ancestor each="" (a real collection) - a button gated this way sends correct data but the client never draws its text (a real JSON UI quirk). Restructure so the OUTER each-gated element IS the button itself, with only plain if=""-gated <text>/<image> children (see profile.ui.html's skill tree for the pattern), and let the button's own action reject an invalid press server-side instead.`);
+        }
+        this.gateDepth += loopHere ? 1 : 0;
         const st = this.style(node);
-        let control = this.element(node, st, loops);
+        let control;
+        try {
+            control = this.element(node, st, loops);
+        } finally {
+            this.gateDepth -= loopHere ? 1 : 0;
+        }
 
         // Presence of an each-instance and/or an if="" condition -> one visibility entry.
         const conds = [];
-        const loop = node._expanded ? loops[loops.length - 1] : null;
+        const loop = loopHere;
         if (loop) conds.push(["bin", "<", ["num", loop[2]], ["filter", "len", loop[1], []]]);
         if (node.attrs.if) conds.push(parseExpr(String(node.attrs.if), this.file, node.line));
         if (conds.length) {
