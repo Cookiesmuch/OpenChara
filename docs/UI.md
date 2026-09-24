@@ -71,36 +71,12 @@ Top-level elements in a `.ui.html` file are `<screen>`, `<hud>` and `<template>`
 | `button on:press="..."` | a pressable; its children are its content |
 | `spacer` | empty space |
 | `use t="name" ...` | pastes a `<template>` (see Templates) |
-| `tabs` / `tab` | real client-side tab switching, no server round trip (below) |
 
 ### Attributes on any element
 
 - **`if="expr"`:** shown only when true. A hidden element with a pixel size along its stack's axis takes no space.
 - **`each="item in list" max="N"`:** repeats the element for each list item, up to `N`. A compiled screen reserves room for N, so pick a real maximum and paginate beyond it. `each="item, i in list"` also gives the index.
 - **`class="a b"`, `id`, `style="width: 40; color: #ffffff"`:** styling (see Styles).
-
-**A `<button>` may never be `if=`/`each=`-gated while nested inside an ancestor `each=` collection.** A button gated that way sends correct data server-side but the client never draws its text - a real JSON UI quirk (compiler-enforced, `compile.js`'s `gateDepth`). Restructure so the outer each-gated element IS the button, with only plain `if=`-gated `<text>`/`<image>` children, and let the action reject an invalid press server-side instead (see any `each="..."` button in the shipped screens for the pattern). A plain `if=` ancestor (e.g. a `<tabs>` body) does **not** count - only a real `each=` collection does, since that's the one case actually confirmed to break.
-
-### Tabs - real client-side switching
-
-Every other value on a screen (even plain text) rides a form entry (§1), which is why *any* action - including switching tabs - used to mean closing and re-showing the whole dialog, with Bedrock's own open/close transition playing every time. `<tabs>` avoids that for tab switching specifically: it compiles to a real JSON UI radio-toggle group (`type: "toggle"`, one shared `toggle_name`), and each tab body's visibility is bound straight to its own toggle's live `#toggle_state` via `source_control_name` - pure client state, never touching the server, so it can't retrigger the transition.
-
-```html
-<tabs class="tabs" default="overview" style="width: fill; height: 203">
-  <tab id="overview" label="{t:my.ui.tab.overview}" style="height: 185">
-    ...content...
-  </tab>
-  <tab id="skills" label="{t:my.ui.tab.skills}" style="height: 185">
-    ...content...
-  </tab>
-</tabs>
-```
-
-- `<tabs default="id">`: which `<tab>` starts active. `style` sets the whole block's own placement (bar + body together).
-- `<tab id="..." label="...">`: `label` must be plain text or a bare `{t:key}` (no data - the tab list itself never changes). `style="height: N"` sets that tab's own body height; all bodies occupy the same rect below the bar, so only one is ever visible.
-- Tab-bar look comes from CSS custom properties on the `<tabs>` element's own class: `tab-width`/`tab-height` (default 54x16), `gap` (default 3), `tab-color`/`tab-active-color` (label colors), `background`/`hover-background`/`pressed-background` (the toggle's own idle look), `tab-active-background` (optional highlight image shown only on the active tab).
-- **Known limitation:** a tab's `label` isn't a form field, so it can't go through the usual `{t:key}` → RawMessage/override pipeline. It's compiled to the bare lang key as a literal string, resolved by the *client's own* `texts/<lang>.lang` - this follows the game's language automatically, but misses a player's in-game language override (Settings screen), unlike every other piece of text on the same screen. Keep tab labels short and don't rely on the override reaching them.
-- New as of this compiler version - every previous new JSON UI mechanism here needed one real in-game test before being trusted (§10); this one does too.
 
 ### Text templates
 

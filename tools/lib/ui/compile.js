@@ -338,8 +338,7 @@ class ScreenCompiler {
     emit(node, loops, axis = null) {
         if (node.text !== undefined) this.err(node, `stray text "${node.text}" - put text inside <text>`);
         if (node.tag === "use") return this.use(node, loops, axis);
-        if (node.tag === "tabs") return this.tabsEl(node, loops);
-        if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")}, use, tabs)`);
+        if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")}, use)`);
 
         if (node.attrs.each && !node._expanded) {
             const m = /^\s*([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s+in\s+(.+)$/.exec(String(node.attrs.each));
@@ -403,123 +402,6 @@ class ScreenCompiler {
             out.push(...this.emit(clone(c), loops, axis));
         }
         return out;
-    }
-
-    // A control's own visibility, sourced from a sibling <toggle>'s live
-    // #toggle_state instead of a form entry (see gated() for the form-fed
-    // version). Pure client state - flipping it never touches the server,
-    // never re-shows the form, so it never retriggers Bedrock's dialog
-    // transition. `toggleName` must be a plain sibling name in the SAME
-    // controls array as the control this produces (see tabsEl() below -
-    // everything lives flat in one array specifically so every reference
-    // here is a bare name, never a "../" path, to keep this as low-risk as
-    // the mechanism allows).
-    visibleFromToggle(control, toggleName, invert, defaultOn, place) {
-        return {
-            type: "panel", ...place,
-            visible: invert ? "!#visible" : "#visible",
-            property_bag: { "#visible": invert ? !defaultOn : defaultOn },
-            bindings: [
-                { binding_name: "#toggle_state", binding_name_override: "#visible", binding_type: "view", source_control_name: toggleName, binding_condition: "always" },
-            ],
-            controls: [{ inner: { ...control, size: ["100%", "100%"] } }],
-        };
-    }
-
-    // <tabs default="id"><tab id="..." label="..."> body </tab>...</tabs> -
-    // real client-side tab switching: a shared toggle_name radio group for
-    // the bar, each body panel's visibility bound to its own toggle's
-    // #toggle_state (visibleFromToggle above). Unlike everything else a
-    // screen shows (every other value rides a form entry - see the file
-    // header comment), a tab switch never touches the server and never
-    // re-shows the form, so it can't retrigger the open/close transition
-    // that made switching tabs look like the whole screen sliding off and
-    // back. New mechanism as of this compiler version - not yet confirmed
-    // in-game, the same way every previous new JSON UI trick here (docs/UI.md)
-    // needed one real test before being trusted.
-    tabsEl(node, loops) {
-        const e = m => this.err(node, m);
-        if (!this.pressAllowed()) e("<tabs> isn't possible on a HUD (the HUD never takes clicks)");
-        const tabNodes = node.children.filter(c => c.tag === "tab");
-        if (!tabNodes.length) e(`<tabs> needs at least one <tab id="..." label="...">`);
-        for (const t of tabNodes) {
-            if (t.text !== undefined) this.err(t, `stray text in <tabs> - only <tab> belongs directly inside <tabs>`);
-            if (t.tag !== "tab") this.err(t, `<tabs> may only contain <tab>, not <${t.tag}>`);
-            if (!t.attrs.id) this.err(t, `<tab> needs id="..."`);
-            if (!t.attrs.label) this.err(t, `<tab id="${t.attrs.id}"> needs label="..."`);
-        }
-        const defaultId = node.attrs.default ?? tabNodes[0].attrs.id;
-        if (!tabNodes.some(t => t.attrs.id === defaultId)) e(`<tabs default="${defaultId}"> - no <tab id="${defaultId}">`);
-
-        const barSt = this.style(node);
-        const tabW = barSt["tab-width"] ? parseFloat(barSt["tab-width"]) : 54;
-        const tabH = barSt["tab-height"] ? parseFloat(barSt["tab-height"]) : 16;
-        const gap = barSt.gap ? parseFloat(barSt.gap) : 3;
-        const groupName = this.name("tabgroup");
-        const toggleNames = tabNodes.map(t => this.name(`toggle_${t.attrs.id}`));
-
-        const bg = key => ({ type: "image", size: [tabW, tabH], texture: barSt[key] ?? barSt.background ?? "textures/ui/button_borderless_light" });
-        const flat = [];
-        tabNodes.forEach((t, i) => {
-            const isDefault = t.attrs.id === defaultId;
-            const x = i * (tabW + gap);
-            const place = { anchor_from: "top_left", anchor_to: "top_left", offset: [x, 0], size: [tabW, tabH] };
-            flat.push({
-                [toggleNames[i]]: {
-                    type: "toggle", ...place,
-                    toggle_name: groupName, toggle_default_state: isDefault,
-                    sound_name: "random.click", sound_volume: 1.0,
-                    focus_enabled: true, focus_magnet_enabled: true,
-                    default_control: "default", hover_control: "hover", pressed_control: "pressed",
-                    button_mappings: [
-                        { from_button_id: "button.menu_select", to_button_id: "button.form_button_click", mapping_type: "pressed" },
-                        { from_button_id: "button.menu_ok", to_button_id: "button.form_button_click", mapping_type: "focused" },
-                    ],
-                    controls: [{ default: bg("background") }, { hover: bg("hover-background") }, { pressed: bg("pressed-background") }],
-                },
-            });
-            // A tab label isn't a form field (see the header comment) so it
-            // can't ride the usual {t:key} -> RawMessage/override pipeline.
-            // {t:key} with no arguments is special-cased to the bare key
-            // string, which the CLIENT resolves on its own straight out of
-            // the resource pack's texts/<lang>.lang (the same file every
-            // real {t:} field's translation already ships in) - this
-            // follows the game's own language automatically, but it's the
-            // one place that misses a player's in-game language OVERRIDE,
-            // since there's no server round trip left to resolve it through.
-            const labelParts = parseTemplate(String(t.attrs.label), this.file, t.line);
-            let text, localize;
-            if (labelParts.length === 1 && labelParts[0][0] === "t" && labelParts[0][2].length === 0) {
-                text = labelParts[0][1];
-                localize = true;
-            } else if (isStaticTemplate(labelParts)) {
-                text = labelParts.map(p => p[1]).join("");
-                localize = false;
-            } else {
-                e(`<tab label="${t.attrs.label}"> must be plain text or {t:key} (no {data} - the tab list itself never changes)`);
-            }
-            const labelCtl = (color) => ({
-                type: "label", size: ["100%", "100%"], text, color, font_size: "normal", font_scale_factor: 0.85,
-                localize, shadow: false, text_alignment: "center", layer: 2,
-            });
-            const labelPlace = { ...place, layer: 2 };
-            flat.push({ [this.name("tabtxt")]: this.visibleFromToggle(labelCtl(hexColor(barSt["tab-color"] ?? "#c8ccec", e)), toggleNames[i], true, isDefault, labelPlace) });
-            flat.push({ [this.name("tabtxtA")]: this.visibleFromToggle(labelCtl(hexColor(barSt["tab-active-color"] ?? "#1c1a26", e)), toggleNames[i], false, isDefault, labelPlace) });
-            if (barSt["tab-active-background"]) {
-                flat.push({ [this.name("tabbgA")]: this.visibleFromToggle({ type: "image", size: [tabW, tabH], texture: barSt["tab-active-background"] }, toggleNames[i], false, isDefault, { ...place, layer: 1 }) });
-            }
-        });
-
-        tabNodes.forEach((t, i) => {
-            const bodySt = this.style(t);
-            const bodyHeight = bodySt.height ? sizeValue(bodySt.height, e) : "100%c";
-            const body = this.container(t, bodySt, loops, { type: "stack_panel", orientation: "vertical" },
-                this.withGap(this.children(t, loops, "vertical"), bodySt.gap ? parseFloat(bodySt.gap) : 0, false));
-            const bodyPlace = { anchor_from: "top_left", anchor_to: "top_left", offset: [0, tabH + 2], size: ["100%", bodyHeight] };
-            flat.push({ [this.name(`tabbody_${t.attrs.id}`)]: this.visibleFromToggle(body, toggleNames[i], false, t.attrs.id === defaultId, bodyPlace) });
-        });
-
-        return [[this.name("tabs"), { type: "panel", size: this.placement(barSt, node).size, controls: flat }]];
     }
 
     // `axis`: pass "horizontal"/"vertical" when `node`'s children actually
