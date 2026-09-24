@@ -19,6 +19,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const { compileUi } = require("./ui/compile.js");
 
 const TEXT_EXT = new Set([".json", ".lang", ".js", ".md", ".txt", ".mcfunction"]);
 
@@ -311,6 +312,16 @@ function build(projectDir) {
         put(bp, `texts/${loc}`, text);
         put(rp, `texts/${loc}`, text);
     }
+
+    // 4b. UI: PATCHES/ui/*.ui.html + *.ui.css -> JSON UI + runtime table.
+    // Always generated (an empty root when a project has no screens), since
+    // the engine's server_form hook and runtime reference both.
+    const uiDir = path.join(p.patchesDir, "ui");
+    const uiFiles = walk(uiDir).filter(f => f.endsWith(".ui.html") || f.endsWith(".ui.css"))
+        .map(rel => ({ rel, text: fs.readFileSync(path.join(uiDir, rel), "utf8") }));
+    const ui = compileUi(uiFiles);
+    for (const [rel, obj] of Object.entries(ui.rp)) put(rp, rel, json(obj));
+    put(bp, "scripts/openchara/ui/screens.generated.js", ui.runtime);
 
     // 5. content scripts
     const contentDir = path.join(p.patchesDir, "scripts");

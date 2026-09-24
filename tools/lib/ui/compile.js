@@ -1,0 +1,499 @@
+// OpenChara UI compiler: PATCHES/ui/*.ui.html + *.ui.css -> JSON UI (resource
+// pack) + a runtime table (behavior pack) that tells the engine which form
+// entry carries which value.
+//
+// How a compiled screen reaches the client (all measured in-game, UI-0):
+//   - The form title is `oc1|<screenKey>|`. The engine's server_form.json hook
+//     sizes our container only when that header is present and hides the
+//     vanilla dialog.
+//   - Each screen sits behind a factory GATE whose #collection_length is 1
+//     only when the title names it, so screens that aren't shown are never
+//     built (bedrock-core S8/S11). Bindings inside a gated screen use
+//     binding_condition "always" (S11: factory-built cells bind too early).
+//   - Every dynamic value is one form ENTRY (an ActionFormData button): text
+//     in its text, textures in its icon, numbers as text read with (x - 0),
+//     visibility as "1"/"0". A control reads its entry through a panel with a
+//     baked collection_index under a stack declaring collection_name.
+//   - A pressable control carries its own collection_details binding (S1),
+//     and is vanilla common.button (mouse, touch, controller, click sound).
+
+"use strict";
+const { parseMarkup, parseCss, parseDecls, parseExpr, parseTemplate, parseAction, isStaticTemplate, UiSyntaxError } = require("./markup.js");
+
+const HEADER = "oc1|";
+const NS = "oc_screens";
+const COLLECTION = "form_buttons";
+
+const TAGS = new Set(["screen", "panel", "row", "column", "grid", "scroll", "text", "image", "portrait", "bar", "button", "spacer"]);
+const CONTAINERS = new Set(["screen", "panel", "row", "column", "grid", "scroll", "button"]);
+
+const DEFAULTS = {
+    screen: { width: "100%", height: "100%" },
+    panel: { width: "100%", height: "100%" },
+    row: { width: "100%", height: "fit" },
+    column: { width: "100%", height: "fit" },
+    grid: { width: "100%", height: "fit", gap: "2" },
+    scroll: { width: "100%", height: "100%" },
+    text: { width: "100%", color: "#ffffff" },
+    image: { width: "32", height: "32" },
+    portrait: { width: "32", height: "32" },
+    bar: { width: "100", height: "8", background: "textures/ui/Black", "bar-color": "#e0405a" },
+    button: {
+        width: "100%", height: "24",
+        background: "textures/ui/button_borderless_light",
+        "hover-background": "textures/ui/button_borderless_lighthover",
+        "pressed-background": "textures/ui/button_borderless_lightpressed",
+    },
+    spacer: { width: "4", height: "4" },
+};
+
+const FONT_HEIGHT = { small: 8, normal: 10, large: 14, extra_large: 20 };
+
+// ---- helpers ---------------------------------------------------------------------------
+function hexColor(v, err) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(v).trim());
+    if (!m) err(`color "${v}" must be #rrggbb`);
+    const n = parseInt(m[1], 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map(x => Math.round(x * 1000) / 1000);
+}
+
+function sizeValue(v, err) {
+    const s = String(v).trim();
+    if (/^-?\d+(\.\d+)?(px)?$/.test(s)) return parseFloat(s);
+    if (/^\d+(\.\d+)?%$/.test(s)) return s;
+    if (s === "fill") return "fill";
+    if (s === "fit") return "100%c";
+    if (/^[\d.%cmsxyp +\-]+$/.test(s)) return s; // raw JSON UI expression, e.g. "100% - 8px"
+    err(`size "${s}" - use a number, N%, fill, fit, or an expression like "100% - 8px"`);
+}
+
+const ANCHORS = ["top_left", "top_middle", "top_right", "left_middle", "center", "right_middle", "bottom_left", "bottom_middle", "bottom_right"];
+
+
+function addPx(size, px) {
+    if (!px) return size;
+    if (typeof size === "number") return size + px;
+    return `${size} + ${px}px`;
+}
+function subPx(size, px) {
+    if (!px) return size;
+    if (typeof size === "number") return Math.max(0, size - px);
+    if (size === "100%c") return size;
+    return `${size} - ${px}px`;
+}
+
+function specificity(sel) { return (sel.id ? 100 : 0) + sel.classes.length * 10 + (sel.tag ? 1 : 0); }
+function matches(sel, node) {
+    if (sel.tag && sel.tag !== node.tag) return false;
+    if (sel.id && sel.id !== node.attrs.id) return false;
+    const classes = String(node.attrs.class ?? "").split(/\s+/).filter(Boolean);
+    return sel.classes.every(c => classes.includes(c));
+}
+
+// ---- compiler ------------------------------------------------------------------------
+class ScreenCompiler {
+    constructor(key, file, rules) {
+        this.key = key;
+        this.file = file;
+        this.rules = rules;
+        this.fields = [];   // runtime table, index = form entry
+        this.defs = {};     // extra top-level JSON UI definitions (scroll contents)
+        this.n = 0;
+    }
+
+    err(node, msg) { throw new UiSyntaxError(this.file, node?.line ?? 0, msg); }
+    name(prefix = "e") { return `${prefix}${this.n++}`; }
+
+    style(node) {
+        const out = { ...(DEFAULTS[node.tag] ?? {}) };
+        const hits = [];
+        this.rules.forEach((rule, order) => {
+            for (const sel of rule.selectors) if (matches(sel, node)) hits.push({ spec: specificity(sel), order, decls: rule.decls });
+        });
+        hits.sort((a, b) => a.spec - b.spec || a.order - b.order);
+        for (const h of hits) Object.assign(out, h.decls);
+        if (typeof node.attrs.style === "string") Object.assign(out, parseDecls(node.attrs.style));
+        return out;
+    }
+
+    field(f) { this.fields.push(f); return this.fields.length - 1; }
+
+    // Common placement props from style -> control.
+    placement(st, node) {
+        const e = m => this.err(node, m);
+        const p = { size: [sizeValue(st.width ?? "100%", e), sizeValue(st.height ?? "100%", e)] };
+        if (st.anchor) {
+            const a = st.anchor.replace(/-/g, "_");
+            if (!ANCHORS.includes(a)) e(`anchor "${st.anchor}" - use one of ${ANCHORS.join(", ").replace(/_/g, "-")}`);
+            p.anchor_from = a; p.anchor_to = a;
+        }
+        if (st.offset) {
+            const [x, y] = st.offset.split(/\s+/);
+            p.offset = [sizeValue(x, e), sizeValue(y ?? "0", e)];
+        }
+        if (st.layer) p.layer = parseInt(st.layer, 10);
+        if (st.opacity) p.alpha = parseFloat(st.opacity);
+        if (st.clip === "true") p.clips_children = true;
+        return p;
+    }
+
+    // Wraps `control` so it reads form entry `index`. The wrapper takes the
+    // control's placement; the control fills the indexed cell.
+    indexed(index, control, extraCell = {}) {
+        const { size, anchor_from, anchor_to, offset, layer, ...rest } = control;
+        const wrap = { type: "stack_panel", orientation: "vertical", size, collection_name: COLLECTION };
+        if (anchor_from) Object.assign(wrap, { anchor_from, anchor_to });
+        if (offset) wrap.offset = offset;
+        if (layer !== undefined) wrap.layer = layer;
+        return {
+            ...wrap,
+            controls: [{ cell: { type: "panel", size: ["100%", "100%"], collection_index: index, ...extraCell, controls: [{ v: { ...rest, size: ["100%", "100%"] } }] } }],
+        };
+    }
+
+    collectionRead(name = "#form_button_text", override) {
+        const b = { binding_name: name, binding_type: "collection", binding_collection_name: COLLECTION, binding_condition: "always" };
+        if (override) b.binding_name_override = override;
+        return b;
+    }
+
+    // Visibility gate for if="..." / each presence. Collapses in stacks when
+    // the control has an absolute size (a stack only folds what it measures).
+    gated(index, control) {
+        const { size, anchor_from, anchor_to, offset, layer, ...rest } = control;
+        // Fold along whichever axis has a fixed pixel size (a full-width
+        // button with a fixed height still collapses out of a column).
+        const [w, h] = size;
+        const hug = typeof w === "number" || typeof h === "number";
+        const wrapSize = [typeof w === "number" ? "100%c" : w, typeof h === "number" ? "100%c" : h];
+        const gateSize = [typeof w === "number" ? w : "100%", typeof h === "number" ? h : "100%"];
+        const wrap = { type: "stack_panel", orientation: typeof h === "number" ? "vertical" : "horizontal", size: hug ? wrapSize : size, collection_name: COLLECTION };
+        if (anchor_from) Object.assign(wrap, { anchor_from, anchor_to });
+        if (offset) wrap.offset = offset;
+        if (layer !== undefined) wrap.layer = layer;
+        return {
+            ...wrap,
+            controls: [{
+                gate: {
+                    type: "panel",
+                    size: hug ? gateSize : ["100%", "100%"],
+                    collection_index: index,
+                    visible: "#visible",
+                    property_bag: { "#visible": false },
+                    bindings: [
+                        this.collectionRead("#form_button_text", "#vis_value"),
+                        { binding_type: "view", source_property_name: "(#vis_value = '1')", target_property_name: "#visible", binding_condition: "always" },
+                    ],
+                    controls: [{ v: { ...rest, size: ["100%", "100%"] } }],
+                },
+            }],
+        };
+    }
+
+    // ---- elements ------------------------------------------------------------------------
+    // Returns an array of [name, control] (each="" expands to several).
+    emit(node, loops) {
+        if (node.text !== undefined) this.err(node, `stray text "${node.text}" - put text inside <text>`);
+        if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")})`);
+
+        if (node.attrs.each && !node._expanded) {
+            const m = /^\s*([A-Za-z_]\w*)\s+in\s+(.+)$/.exec(String(node.attrs.each));
+            if (!m) this.err(node, `each="${node.attrs.each}" - write each="item in list"`);
+            const max = parseInt(node.attrs.max ?? "", 10);
+            if (!(max > 0)) this.err(node, `each= needs max="N" - a compiled screen reserves room for at most N items`);
+            const listAst = parseExpr(m[2], this.file, node.line);
+            const out = [];
+            for (let k = 0; k < max; k++) {
+                const clone = { ...node, _expanded: true };
+                out.push(...this.emit(clone, [...loops, [m[1], listAst, k]]));
+            }
+            return out;
+        }
+
+        const st = this.style(node);
+        let control = this.element(node, st, loops);
+
+        // Presence of an each-instance and/or an if="" condition -> one visibility entry.
+        const conds = [];
+        const loop = node._expanded ? loops[loops.length - 1] : null;
+        if (loop) conds.push(["bin", "<", ["num", loop[2]], ["filter", "len", loop[1], []]]);
+        if (node.attrs.if) conds.push(parseExpr(String(node.attrs.if), this.file, node.line));
+        if (conds.length) {
+            const e = conds.reduce((a, b) => ["bin", "&&", a, b]);
+            control = this.gated(this.field({ k: "vis", e, loops }), control);
+        }
+        return [[this.name(node.tag.slice(0, 3)), control]];
+    }
+
+    children(node, loops) {
+        const out = [];
+        for (const c of node.children) {
+            if (c.text !== undefined) this.err(c, `stray text "${c.text}" in <${node.tag}> - put text inside <text>`);
+            out.push(...this.emit(c, loops));
+        }
+        return out;
+    }
+
+    withGap(entries, gap, horizontal) {
+        if (!gap) return entries.map(([n, c]) => ({ [n]: c }));
+        const out = [];
+        entries.forEach(([n, c], i) => {
+            if (i > 0) out.push({ [this.name("gap")]: { type: "panel", size: horizontal ? [gap, "100%"] : ["100%", gap] } });
+            out.push({ [n]: c });
+        });
+        return out;
+    }
+
+    background(st, node) {
+        if (st.background || st["background-color"]) {
+            const img = { type: "image", texture: st.background ?? "textures/ui/White" };
+            if (st["background-color"]) img.color = hexColor(st["background-color"], m => this.err(node, m));
+            if (st.nineslice) img.nineslice_size = parseInt(st.nineslice, 10);
+            if (st["background-opacity"]) img.alpha = parseFloat(st["background-opacity"]);
+            return img;
+        }
+        return null;
+    }
+
+    // Container: optional background image around a layout panel/stack with padding.
+    container(node, st, loops, layoutCtl, childControls) {
+        const place = this.placement(st, node);
+        const pad = st.padding ? parseFloat(st.padding) : 0;
+        const bg = this.background(st, node);
+        const inner = { ...layoutCtl, controls: childControls };
+        const [w, h] = place.size;
+        inner.size = [w === "100%c" ? "100%c" : (pad ? subPx("100%", pad * 2) : "100%"), h === "100%c" ? "100%c" : (pad ? subPx("100%", pad * 2) : "100%")];
+        if (!bg && !pad) return { ...place, ...inner, size: place.size };
+        const outer = { ...(bg ?? { type: "panel" }), ...place };
+        if (pad) outer.size = [w === "100%c" ? addPx("100%c", pad * 2) : w, h === "100%c" ? addPx("100%c", pad * 2) : h];
+        outer.controls = [{ inner }];
+        return outer;
+    }
+
+    element(node, st, loops) {
+        const e = m => this.err(node, m);
+        const gap = st.gap ? parseFloat(st.gap) : 0;
+        switch (node.tag) {
+            case "screen":
+            case "panel":
+                return this.container(node, st, loops, { type: "panel" }, this.children(node, loops).map(([n, c]) => ({ [n]: c })));
+            case "row":
+            case "column": {
+                const horizontal = node.tag === "row";
+                return this.container(node, st, loops, { type: "stack_panel", orientation: horizontal ? "horizontal" : "vertical" },
+                    this.withGap(this.children(node, loops), gap, horizontal));
+            }
+            case "grid": {
+                const cols = parseInt(node.attrs.columns ?? "", 10);
+                if (!(cols > 0)) e(`<grid> needs columns="N"`);
+                const cells = this.children(node, loops);
+                const rows = [];
+                for (let i = 0; i < cells.length; i += cols) {
+                    rows.push([this.name("row"), { type: "stack_panel", orientation: "horizontal", size: ["100%", "100%c"], controls: this.withGap(cells.slice(i, i + cols), gap, true) }]);
+                }
+                return this.container(node, st, loops, { type: "stack_panel", orientation: "vertical" }, this.withGap(rows, gap, false));
+            }
+            case "scroll": {
+                const defName = this.name("scroll_");
+                this.defs[`${this.key}_${defName}`] = {
+                    type: "stack_panel", orientation: "vertical", size: ["100% - 4px", "100%c"],
+                    anchor_from: "top_left", anchor_to: "top_left",
+                    controls: this.withGap(this.children(node, loops), gap, false),
+                };
+                const place = this.placement(st, node);
+                return {
+                    type: "panel", ...place,
+                    controls: [{
+                        [`${defName}@common.scrolling_panel`]: {
+                            anchor_to: "top_left", anchor_from: "top_left",
+                            $show_background: false,
+                            size: ["100%", "100%"],
+                            $scrolling_content: `${NS}.${this.key}_${defName}`,
+                            $scroll_size: [5, "100% - 4px"],
+                            $scrolling_pane_size: ["100% - 4px", "100% - 2px"],
+                            $scrolling_pane_offset: [2, 0],
+                            $scroll_bar_right_padding_size: [0, 0],
+                        },
+                    }],
+                };
+            }
+            case "spacer":
+                return { type: "panel", ...this.placement(st, node) };
+            case "text": {
+                const raw = node.children.map(c => (c.text !== undefined ? c.text : e("<text> may only contain text"))).join(" ");
+                const parts = parseTemplate(raw, this.file, node.line);
+                const scale = st["font-scale"] ? parseFloat(st["font-scale"]) : 1;
+                const fontSize = st["font-size"] ?? "normal";
+                if (!FONT_HEIGHT[fontSize]) e(`font-size "${fontSize}" - use small, normal, large or extra_large`);
+                const lines = st.lines ? parseInt(st.lines, 10) : 1;
+                const lineH = Math.ceil(FONT_HEIGHT[fontSize] * scale);
+                const place = this.placement({ ...st, height: st.height ?? String(lineH * lines) }, node);
+                const label = {
+                    type: "label", ...place,
+                    color: hexColor(st.color ?? "#ffffff", e),
+                    font_size: fontSize,
+                    localize: false,
+                    shadow: st.shadow === "true",
+                };
+                if (scale !== 1) label.font_scale_factor = scale;
+                if (st["text-align"]) label.text_alignment = st["text-align"];
+                if (isStaticTemplate(parts)) return { ...label, text: parts.map(p => p[1]).join("") };
+                label.text = "#form_button_text";
+                label.bindings = [this.collectionRead()];
+                return this.indexed(this.field({ k: "text", t: parts, loops }), label);
+            }
+            case "image":
+            case "portrait": {
+                const src = String(node.attrs.src ?? "");
+                if (!src) e(`<${node.tag}> needs src="..."`);
+                const parts = parseTemplate(src, this.file, node.line);
+                const img = { type: "image", ...this.placement(st, node) };
+                if (st.color) img.color = hexColor(st.color, e);
+                if (st.nineslice) img.nineslice_size = parseInt(st.nineslice, 10);
+                if (isStaticTemplate(parts)) return { ...img, texture: parts.map(p => p[1]).join("") };
+                img.bindings = [
+                    this.collectionRead("#form_button_texture", "#texture"),
+                    this.collectionRead("#form_button_texture_file_system", "#texture_file_system"),
+                ];
+                return this.indexed(this.field({ k: "tex", t: parts, loops }), img);
+            }
+            case "bar": {
+                const place = this.placement(st, node);
+                const [w, h] = place.size;
+                if (typeof w !== "number" || typeof h !== "number") e(`<bar> needs a pixel width and height`);
+                if (!node.attrs.value) e(`<bar> needs value="{expr}" (0-100)`);
+                const pad = st.padding !== undefined ? parseFloat(st.padding) : 1;
+                const inner = w - pad * 2;
+                const frame = { ...this.background(st, node), ...place };
+                const fill = {
+                    type: "image", texture: st["bar-texture"] ?? "textures/ui/White",
+                    color: hexColor(st["bar-color"], e),
+                    anchor_from: "left_middle", anchor_to: "left_middle",
+                    size: [0, h - pad * 2],
+                    bindings: [
+                        this.collectionRead(),
+                        { binding_type: "view", source_property_name: "(#form_button_text - 0)", target_property_name: "#size_binding_x", binding_condition: "always" },
+                        { binding_type: "view", source_property_name: `((#form_button_text = #form_button_text) * ${h - pad * 2})`, target_property_name: "#size_binding_y", binding_condition: "always" },
+                    ],
+                };
+                const valueAst = parseTemplate(String(node.attrs.value), this.file, node.line).find(p => p[0] === "e")?.[1];
+                if (!valueAst) e(`<bar value="..."> must be an expression in {braces}`);
+                const index = this.field({ k: "bar", e: valueAst, px: inner, loops });
+                frame.controls = [{
+                    track: {
+                        type: "stack_panel", orientation: "vertical", size: ["100%", "100%"], collection_name: COLLECTION,
+                        controls: [{
+                            cell: {
+                                type: "panel", size: ["100%", "100%"], collection_index: index,
+                                controls: [{ unit: { type: "panel", size: [1, 1], anchor_from: "left_middle", anchor_to: "left_middle", offset: [pad, 0], controls: [{ fill }] } }],
+                            },
+                        }],
+                    },
+                }];
+                return frame;
+            }
+            case "button": {
+                const action = node.attrs["on:press"];
+                if (!action) e(`<button> needs on:press="..."`);
+                const place = this.placement(st, node);
+                const stateImg = key => {
+                    const img = { type: "image", size: ["100%", "100%"], texture: st[key] ?? st.background };
+                    if (st.nineslice) img.nineslice_size = parseInt(st.nineslice, 10);
+                    const colorKey = key === "background" ? "background-color" : key.replace("background", "background-color");
+                    if (st[colorKey]) img.color = hexColor(st[colorKey], e);
+                    return img;
+                };
+                const press = this.field({ k: "press", a: parseAction(String(action), this.file, node.line), loops });
+                const btn = {
+                    type: "button", size: ["100%", "100%"],
+                    sound_name: "random.click", sound_volume: 1.0,
+                    focus_enabled: true, focus_magnet_enabled: true,
+                    default_control: "default", hover_control: "hover", pressed_control: "pressed", locked_control: "",
+                    button_mappings: [
+                        { from_button_id: "button.menu_select", to_button_id: "button.form_button_click", mapping_type: "pressed" },
+                        { from_button_id: "button.menu_ok", to_button_id: "button.form_button_click", mapping_type: "focused" },
+                    ],
+                    bindings: [{ binding_type: "collection_details", binding_collection_name: COLLECTION }],
+                    controls: [
+                        { default: stateImg("background") },
+                        { hover: stateImg("hover-background") },
+                        { pressed: stateImg("pressed-background") },
+                    ],
+                };
+                // Content draws as a sibling ABOVE the button (labels/images
+                // don't take input, so presses still reach the button).
+                const pad = st.padding ? parseFloat(st.padding) : 0;
+                const horizontal = (st.direction ?? "column") === "row";
+                const content = {
+                    type: "stack_panel", orientation: horizontal ? "horizontal" : "vertical", layer: 2,
+                    size: [subPx("100%", pad * 2), subPx("100%", pad * 2)],
+                    controls: this.withGap(this.children(node, loops), st.gap ? parseFloat(st.gap) : 0, horizontal),
+                };
+                return {
+                    type: "panel", ...place,
+                    controls: [
+                        { press: { type: "stack_panel", size: ["100%", "100%"], collection_name: COLLECTION, controls: [{ cell: { type: "panel", size: ["100%", "100%"], collection_index: press, controls: [{ b: btn }] } }] } },
+                        { content },
+                    ],
+                };
+            }
+            default:
+                return e(`unhandled <${node.tag}>`);
+        }
+    }
+}
+
+// ---- entry point ---------------------------------------------------------------------
+// files: [{ rel, text }] for *.ui.html and *.ui.css under PATCHES/ui.
+function compileUi(files) {
+    const rules = [];
+    for (const f of files.filter(f => f.rel.endsWith(".ui.css"))) rules.push(...parseCss(f.text, `ui/${f.rel}`));
+
+    const screens = {};
+    const jsonUi = { namespace: NS, root: { type: "panel", size: ["100%", "100%"], controls: [] } };
+    for (const f of files.filter(f => f.rel.endsWith(".ui.html"))) {
+        const file = `ui/${f.rel}`;
+        const doc = parseMarkup(f.text, file);
+        for (const top of doc.children) {
+            if (top.text !== undefined) throw new UiSyntaxError(file, top.line, "text outside <screen>");
+            if (top.tag !== "screen") throw new UiSyntaxError(file, top.line, `top-level elements must be <screen>, got <${top.tag}>`);
+            const key = String(top.attrs.id ?? "");
+            if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new UiSyntaxError(file, top.line, `<screen id="${key}"> - ids are lowercase letters, digits, _`);
+            if (screens[key]) throw new UiSyntaxError(file, top.line, `screen "${key}" is defined twice`);
+
+            const c = new ScreenCompiler(key, file, rules);
+            const [[, control]] = c.emit(top, []);
+            jsonUi[`screen_${key}`] = control;
+            Object.assign(jsonUi, c.defs);
+            jsonUi.root.controls.push({
+                [`gate_${key}`]: {
+                    type: "collection_panel",
+                    size: ["100%", "100%"],
+                    factory: { name: `oc_gate_${key}`, control_name: `@${NS}.screen_${key}` },
+                    bindings: [
+                        { binding_name: "#title_text" },
+                        {
+                            binding_type: "view",
+                            source_property_name: `((not ((#title_text - '${HEADER}${key}|') = #title_text)) * 1)`,
+                            target_property_name: "#collection_length",
+                        },
+                    ],
+                },
+            });
+            screens[key] = {
+                params: String(top.attrs.params ?? "").split(",").map(s => s.trim()).filter(Boolean),
+                provider: top.attrs.data ? String(top.attrs.data) : null,
+                fields: c.fields,
+            };
+        }
+    }
+    return {
+        rp: { "ui/openchara/screens.json": jsonUi },
+        runtime: `// GENERATED by OpenChara UI compiler from PATCHES/ui - do not edit.\n` +
+            `export const UI_HEADER = ${JSON.stringify(HEADER)};\n` +
+            `export const SCREENS = ${JSON.stringify(screens)};\n`,
+        stats: Object.fromEntries(Object.entries(screens).map(([k, s]) => [k, s.fields.length])),
+    };
+}
+
+module.exports = { compileUi, HEADER };

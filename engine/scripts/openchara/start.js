@@ -15,6 +15,7 @@ import { startHuntLoop } from "./hunt.js";
 import { startArmyLoop } from "./army.js";
 import { registerSouls } from "./souls.js";
 import { TAG } from "./ids.js";
+import "./ui/builtins.js"; // built-in UI providers + actions (registered at load)
 
 let started = false;
 

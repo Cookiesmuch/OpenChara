@@ -61,6 +61,10 @@ export { setAutoTriggerEnabled, isAutoTriggerEnabled } from "./playbookTriggers.
 export { pickHuntTarget, startHunt } from "./hunt.js";
 export { envelopTarget } from "./army.js";
 
+// ---- custom UI (PATCHES/ui/*.ui.html) ---------------------------------------------
+export { openScreen, hasScreen, registerUiProvider, registerUiHandler, registerUiAction, evaluate as evaluateUiExpression } from "./ui/runtime.js";
+export { characterView } from "./ui/builtins.js";
+
 // ---- items / UI helpers ------------------------------------------------------------
 export { serializeItem, deserializeItem, serializeGear, deserializeGear, serializeInventory, deserializeInventory } from "./itemSerializer.js";
 export { promptNickname } from "./nicknameUI.js";
