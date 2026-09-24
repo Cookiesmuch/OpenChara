@@ -224,17 +224,51 @@ class ScreenCompiler {
         return b;
     }
 
-    // Visibility gate for if="..." / each presence. Collapses in stacks when
-    // the control has an absolute size (a stack only folds what it measures).
-    gated(index, control) {
+    // Visibility gate for if="..." / each presence.
+    //
+    // `axis` is the immediate parent's real stacking direction: "horizontal"
+    // for a <row>/<grid> cell, "vertical" for a <column>/<scroll>/button
+    // content stack, or null when the parent doesn't flow its children at
+    // all (a bare <panel>/<screen>, where each child is independently
+    // anchored - nothing needs to collapse there, so any size is fine).
+    //
+    // Inside an actual stack, JSON UI can only "measure past" a hidden
+    // sibling along an axis that's a literal pixel number - never a
+    // percentage/fill one (a stack_panel sized "100%c" folds to whatever it
+    // currently measures, and only a fixed-size hidden child measures as
+    // zero). A gated sibling whose size on the STACK's own axis is a
+    // percentage therefore can never truly collapse: it keeps reserving
+    // that width/height even while hidden, which pushes every sibling after
+    // it out of the row/column - in the worst case off the panel entirely
+    // (this is exactly what happened to Squad > Disband's Cancel button:
+    // the Yes/No row is horizontal, but the buttons' fold-eligible axis was
+    // their fixed HEIGHT, not their percentage WIDTH, so the hidden
+    // alternate-style button's 50% width was never reclaimed). So when
+    // `axis` is known, that axis must be numeric - otherwise this is a
+    // compile error, not a layout bug for someone to find by playing.
+    gated(index, control, node, axis) {
         const { size, anchor_from, anchor_to, offset, layer, ...rest } = control;
-        // Fold along whichever axis has a fixed pixel size (a full-width
-        // button with a fixed height still collapses out of a column).
         const [w, h] = size;
-        const hug = typeof w === "number" || typeof h === "number";
-        const wrapSize = [typeof w === "number" ? "100%c" : w, typeof h === "number" ? "100%c" : h];
-        const gateSize = [typeof w === "number" ? w : "100%", typeof h === "number" ? h : "100%"];
-        const wrap = { type: "stack_panel", orientation: typeof h === "number" ? "vertical" : "horizontal", size: hug ? wrapSize : size, collection_name: COLLECTION };
+        let hug, orientation, wrapSize, gateSize;
+        if (axis) {
+            const foldWidth = axis === "horizontal";
+            const fold = foldWidth ? w : h;
+            if (typeof fold !== "number") {
+                this.err(node, `an if=""/each item here sits in a ${axis === "horizontal" ? "row or grid" : "column or scroll"}, so its ${foldWidth ? "width" : "height"} must be a plain pixel number (it's "${fold}") - a percentage/fill size can't be hidden without leaving its space behind`);
+            }
+            hug = true;
+            orientation = axis;
+            wrapSize = foldWidth ? ["100%c", h] : [w, "100%c"];
+            gateSize = foldWidth ? [fold, typeof h === "number" ? h : "100%"] : [typeof w === "number" ? w : "100%", fold];
+        } else {
+            // Not flowing past anything - fold along whichever axis has a
+            // fixed pixel size anyway (harmless, keeps old behavior exactly).
+            hug = typeof w === "number" || typeof h === "number";
+            orientation = typeof h === "number" ? "vertical" : "horizontal";
+            wrapSize = [typeof w === "number" ? "100%c" : w, typeof h === "number" ? "100%c" : h];
+            gateSize = [typeof w === "number" ? w : "100%", typeof h === "number" ? h : "100%"];
+        }
+        const wrap = { type: "stack_panel", orientation, size: hug ? wrapSize : size, collection_name: COLLECTION };
         if (anchor_from) Object.assign(wrap, { anchor_from, anchor_to });
         if (offset) wrap.offset = offset;
         if (layer !== undefined) wrap.layer = layer;
@@ -292,14 +326,17 @@ class ScreenCompiler {
             },
         };
     }
-    gate(index, control) { return this.gated(index, control); }
+    gate(index, control, node, axis) { return this.gated(index, control, node, axis); }
     pressAllowed() { return true; }
 
     // ---- elements ------------------------------------------------------------------------
     // Returns an array of [name, control] (each="" expands to several).
-    emit(node, loops) {
+    // `axis` is the immediate parent stack's direction (see gated() above) -
+    // callers that actually flow their children (row/column/grid/scroll,
+    // button content) pass it; a bare panel/screen leaves it null.
+    emit(node, loops, axis = null) {
         if (node.text !== undefined) this.err(node, `stray text "${node.text}" - put text inside <text>`);
-        if (node.tag === "use") return this.use(node, loops);
+        if (node.tag === "use") return this.use(node, loops, axis);
         if (!TAGS.has(node.tag)) this.err(node, `unknown element <${node.tag}> (known: ${[...TAGS].join(", ")}, use)`);
 
         if (node.attrs.each && !node._expanded) {
@@ -313,7 +350,7 @@ class ScreenCompiler {
                 const clone = { ...node, _expanded: true };
                 const loop = [m[1], listAst, k];
                 if (m[2]) loop.push(m[2]);
-                out.push(...this.emit(clone, [...loops, loop]));
+                out.push(...this.emit(clone, [...loops, loop], axis));
             }
             return out;
         }
@@ -328,14 +365,14 @@ class ScreenCompiler {
         if (node.attrs.if) conds.push(parseExpr(String(node.attrs.if), this.file, node.line));
         if (conds.length) {
             const e = conds.reduce((a, b) => ["bin", "&&", a, b]);
-            control = this.gate(this.field({ k: "vis", e, loops }), control);
+            control = this.gate(this.field({ k: "vis", e, loops }), control, node, axis);
         }
         return [[this.name(node.tag.slice(0, 3)), control]];
     }
 
     // <use t="name" var="value"/> pastes <template id="name">'s children,
     // with every $var in their attributes and text replaced (unset -> "").
-    use(node, loops) {
+    use(node, loops, axis = null) {
         const tpl = this.templates?.[node.attrs.t];
         if (!tpl) this.err(node, `<use t="${node.attrs.t}"> - no <template id="${node.attrs.t}"> (templates: ${Object.keys(this.templates ?? {}).join(", ") || "none"})`);
         const sub = v => String(v).replace(/\$([A-Za-z_]\w*)/g, (_, k) => (node.attrs[k] === undefined ? "" : String(node.attrs[k])));
@@ -345,16 +382,20 @@ class ScreenCompiler {
         const out = [];
         for (const c of tpl.children) {
             if (c.text !== undefined) continue;
-            out.push(...this.emit(clone(c), loops));
+            out.push(...this.emit(clone(c), loops, axis));
         }
         return out;
     }
 
-    children(node, loops) {
+    // `axis`: pass "horizontal"/"vertical" when `node`'s children actually
+    // flow one after another (row/column/grid/scroll, button content);
+    // leave null for a bare panel/screen, whose children are independently
+    // anchored and never need to collapse (see gated()).
+    children(node, loops, axis = null) {
         const out = [];
         for (const c of node.children) {
             if (c.text !== undefined) this.err(c, `stray text "${c.text}" in <${node.tag}> - put text inside <text>`);
-            out.push(...this.emit(c, loops));
+            out.push(...this.emit(c, loops, axis));
         }
         return out;
     }
@@ -406,12 +447,12 @@ class ScreenCompiler {
             case "column": {
                 const horizontal = node.tag === "row";
                 return this.container(node, st, loops, { type: "stack_panel", orientation: horizontal ? "horizontal" : "vertical" },
-                    this.withGap(this.children(node, loops), gap, horizontal));
+                    this.withGap(this.children(node, loops, horizontal ? "horizontal" : "vertical"), gap, horizontal));
             }
             case "grid": {
                 const cols = parseInt(node.attrs.columns ?? "", 10);
                 if (!(cols > 0)) e(`<grid> needs columns="N"`);
-                const cells = this.children(node, loops);
+                const cells = this.children(node, loops, "horizontal"); // each cell ends up in a horizontal row
                 const rows = [];
                 for (let i = 0; i < cells.length; i += cols) {
                     rows.push([this.name("row"), { type: "stack_panel", orientation: "horizontal", size: ["100%", "100%c"], controls: this.withGap(cells.slice(i, i + cols), gap, true) }]);
@@ -423,7 +464,7 @@ class ScreenCompiler {
                 this.defs[`${this.key}_${defName}`] = {
                     type: "stack_panel", orientation: "vertical", size: ["100% - 4px", "100%c"],
                     anchor_from: "top_left", anchor_to: "top_left",
-                    controls: this.withGap(this.children(node, loops), gap, false),
+                    controls: this.withGap(this.children(node, loops, "vertical"), gap, false),
                 };
                 const place = this.placement(st, node);
                 return {
@@ -532,7 +573,7 @@ class ScreenCompiler {
                 const content = {
                     type: "stack_panel", orientation: horizontal ? "horizontal" : "vertical", layer: 2,
                     size: [subPx("100%", pad * 2), subPx("100%", pad * 2)],
-                    controls: this.withGap(this.children(node, loops), st.gap ? parseFloat(st.gap) : 0, horizontal),
+                    controls: this.withGap(this.children(node, loops, horizontal ? "horizontal" : "vertical"), st.gap ? parseFloat(st.gap) : 0, horizontal),
                 };
                 return {
                     type: "panel", ...place,
@@ -601,10 +642,25 @@ class HudCompiler extends ScreenCompiler {
         return { unit: { type: "panel", size: [1, 1], anchor_from: "left_middle", anchor_to: "left_middle", offset: [pad, 0], controls: [{ fill: f }] } };
     }
     // The data control sits BESIDE the gated content: a hidden subtree
-    // wouldn't keep catching its own updates.
-    gate(index, control) {
+    // wouldn't keep catching its own updates. Same axis-fold requirement as
+    // ScreenCompiler.gated() (see its comment) applies to a HUD
+    // row/column of each=""/if="" elements.
+    gate(index, control, node, axis) {
         const { size, anchor_from, anchor_to, offset, layer, ...rest } = control;
-        const wrap = { type: "panel", size };
+        const [w, h] = size;
+        let wrap, innerSize;
+        if (axis) {
+            const foldWidth = axis === "horizontal";
+            const fold = foldWidth ? w : h;
+            if (typeof fold !== "number") {
+                this.err(node, `an if=""/each item here sits in a HUD ${axis === "horizontal" ? "row" : "column"}, so its ${foldWidth ? "width" : "height"} must be a plain pixel number (it's "${fold}") - a percentage/fill size can't be hidden without leaving its space behind`);
+            }
+            wrap = { type: "stack_panel", orientation: axis, size: foldWidth ? ["100%c", h] : [w, "100%c"] };
+            innerSize = foldWidth ? [fold, typeof h === "number" ? h : "100%"] : [typeof w === "number" ? w : "100%", fold];
+        } else {
+            wrap = { type: "panel", size };
+            innerSize = ["100%", "100%"];
+        }
         if (anchor_from) Object.assign(wrap, { anchor_from, anchor_to });
         if (offset) wrap.offset = offset;
         if (layer !== undefined) wrap.layer = layer;
@@ -615,7 +671,7 @@ class HudCompiler extends ScreenCompiler {
                 this.data(index),
                 {
                     g: {
-                        ...rest, size: ["100%", "100%"],
+                        ...rest, size: innerSize,
                         visible: "#visible",
                         property_bag: { "#visible": false },
                         bindings: [{
