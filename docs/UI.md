@@ -1,5 +1,7 @@
 # OpenChara UI
 
+The compiler and runtime described here now live in their own repo, [MinUI](https://github.com/Cookiesmuch/MinUI) (`../MinUI` as a sibling checkout, same convention as this repo itself relative to a project's PATCHES) - OpenChara just consumes it (`tools/lib/build.js` resolves `p.minuiDir`, defaulting to `../MinUI`). This doc stays here because it's the reference for *writing* screens in an OpenChara-based project, which is unchanged; MinUI's own README covers the actual transport/architecture (forms vs HUD vs containers, and why) in more depth.
+
 OpenChara gives a project a fully custom in-game UI. You write screens in an HTML-like language with CSS-like styles. The build compiles them to Minecraft JSON UI plus a table the engine uses at runtime. Your screens get:
 
 - full-screen **menus**, with navigation, popups, text prompts and dialogue;

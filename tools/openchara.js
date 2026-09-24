@@ -39,7 +39,7 @@ function stamp() { return new Date().toTimeString().slice(0, 8); }
 function buildChecked(projectDir) {
     const t0 = Date.now();
     const result = build(projectDir);
-    const errors = [...checkTree(result.bp, "BP"), ...checkTree(result.rp, "RP")];
+    const errors = [...checkTree(result.bp, "BP", result.project.minuiDir), ...checkTree(result.rp, "RP", result.project.minuiDir)];
     result.ms = Date.now() - t0;
     if (errors.length) {
         const e = new Error(`Build has ${errors.length} problem(s):\n  - ${errors.join("\n  - ")}`);

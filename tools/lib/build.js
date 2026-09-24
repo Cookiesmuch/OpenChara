@@ -19,7 +19,6 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { compileUi } = require("./ui/compile.js");
 
 // Minecraft Bedrock's own game languages (texts/<id>.lang it will load).
 const GAME_LOCALES = new Set([
@@ -40,8 +39,6 @@ function parseLang(text) {
     }
     return out;
 }
-const { generatePortraits } = require("./portraits.js");
-
 const TEXT_EXT = new Set([".json", ".lang", ".js", ".md", ".txt", ".mcfunction"]);
 
 function readJson(file) {
@@ -87,6 +84,12 @@ function loadProject(projectDir) {
     p.patchesDir = patchesDir;
     p.engineDir = path.resolve(projectDir, p.engine ?? "../OpenChara");
     need(fs.existsSync(path.join(p.engineDir, "engine")), `engine not found at ${p.engineDir} (set "engine" to the OpenChara folder)`);
+    // MinUI (github.com/Cookiesmuch/MinUI): the UI compiler + runtime moved
+    // there, out of OpenChara - a sibling repo, same "engine"-style
+    // resolution as OpenChara itself, since this whole workspace is a flat
+    // set of sibling checkouts, not a monorepo.
+    p.minuiDir = path.resolve(projectDir, p.minui ?? "../MinUI");
+    need(fs.existsSync(path.join(p.minuiDir, "lib", "compile.js")), `MinUI not found at ${p.minuiDir} (set "minui" to the MinUI folder - github.com/Cookiesmuch/MinUI)`);
     return p;
 }
 
@@ -285,6 +288,8 @@ function manifests(p) {
 // ---- main -------------------------------------------------------------------
 function build(projectDir) {
     const p = loadProject(projectDir);
+    const { compileUi } = require(path.join(p.minuiDir, "lib", "compile.js"));
+    const { generatePortraits } = require(path.join(p.minuiDir, "lib", "portraits.js"));
     const vars = placeholders(p);
     const content = loadContent(p);
     const engine = path.join(p.engineDir, "engine");
@@ -301,10 +306,27 @@ function build(projectDir) {
         }
     }
 
+    // 2b. MinUI (github.com/Cookiesmuch/MinUI) - the UI compiler/runtime's
+    // own repo. Its rp/ files land at the same output paths OpenChara's own
+    // engine/rp/ui files always have; its runtime/ scripts land at
+    // scripts/openchara/ui/, alongside OpenChara's OWN remaining files in
+    // that same folder (builtins.js, bag.js, rts.js - genuinely
+    // OpenChara-specific, not generic UI mechanism, so they stayed put).
+    for (const rel of walk(path.join(p.minuiDir, "rp"))) {
+        const buf = fs.readFileSync(path.join(p.minuiDir, "rp", rel));
+        put(rp, rel, TEXT_EXT.has(path.extname(rel)) ? fill(buf.toString("utf8"), vars) : buf);
+    }
+    const minuiRuntimeFiles = new Set();
+    for (const rel of walk(path.join(p.minuiDir, "runtime"))) {
+        minuiRuntimeFiles.add(rel);
+        put(bp, `scripts/openchara/ui/${rel}`, fs.readFileSync(path.join(p.minuiDir, "runtime", rel)));
+    }
+
     // 3. engine scripts
     const scripts = path.join(engine, "scripts");
     for (const rel of walk(scripts)) {
         if (!p.devTools && rel.startsWith("openchara/devtools/")) continue;
+        if (rel.startsWith("openchara/ui/") && minuiRuntimeFiles.has(rel.slice("openchara/ui/".length))) continue; // now MinUI's, copied above
         put(bp, `scripts/${rel}`, fs.readFileSync(path.join(scripts, rel)));
     }
 

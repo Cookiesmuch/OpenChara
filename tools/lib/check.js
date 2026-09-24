@@ -11,7 +11,6 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { lintJsonUi } = require("./lintjsonui.js");
 
 function exportsOf(src) {
     const out = new Set();
@@ -25,7 +24,7 @@ function exportsOf(src) {
     return out;
 }
 
-function checkTree(map, label) {
+function checkTree(map, label, minuiDir) {
     const errors = [];
     const files = [...map.keys()];
 
@@ -35,8 +34,11 @@ function checkTree(map, label) {
     }
 
     // JSON UI (resource pack ui/**) has silent-failure footguns that parse
-    // fine and just do nothing in-game - lint them (see docs/UI.md).
-    errors.push(...lintJsonUi(map, label));
+    // fine and just do nothing in-game - lint them (MinUI's own docs).
+    if (minuiDir) {
+        const { lintJsonUi } = require(path.join(minuiDir, "lib", "lintjsonui.js"));
+        errors.push(...lintJsonUi(map, label));
+    }
 
     const scripts = files.filter(f => f.endsWith(".js"));
     if (scripts.length) {

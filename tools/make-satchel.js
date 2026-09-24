@@ -7,7 +7,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { createImage, encodePng, setPixel } = require("./lib/png.js");
+const { createImage, encodePng, setPixel } = require("../../MinUI/lib/png.js");
 
 const img = createImage(32, 32);
 const leather = (x, y) => {
