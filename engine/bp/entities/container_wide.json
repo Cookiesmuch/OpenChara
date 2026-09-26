@@ -27,7 +27,7 @@
       "{{ns}}_container_tamed": {
         "minecraft:is_tamed": {},
         "minecraft:is_chested": {},
-        "minecraft:inventory": { "container_type": "horse", "inventory_size": 90, "private": false, "restrict_to_owner": true }
+        "minecraft:inventory": { "container_type": "horse", "inventory_size": 30, "private": false, "restrict_to_owner": true }
       }
     }
   }
